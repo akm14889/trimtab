@@ -107,4 +107,15 @@ func TestRenderFormats(t *testing.T) {
 	if roundTrip.Name != "prod-metrics" {
 		t.Errorf("roundTrip.Name = %q", roundTrip.Name)
 	}
+
+	promRWRep := *rep
+	promRWRep.Target = "promrw"
+	promRWRep.SynthesizedOutputPath = "./out/trimtab-remote-write.yaml"
+	promRWTable, err := Render(&promRWRep, FormatTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(promRWTable, "Synthesized Prometheus remote_write rules -> ./out/trimtab-remote-write.yaml") {
+		t.Errorf("promrw table output missing Prometheus remote_write rules footer:\n%s", promRWTable)
+	}
 }

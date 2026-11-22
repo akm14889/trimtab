@@ -41,3 +41,11 @@ local_resource(
     trigger_mode=TRIGGER_MODE_MANUAL,
     labels=['trimtab'],
 )
+
+local_resource(
+    'synth-promrw-preview',
+    cmd='kubectl -n trimtab-local run trimtab-promrw-preview --rm -i --restart=Never --image=trimtab-dev:latest --image-pull-policy=IfNotPresent -- synth --config /workspace/examples/demo/trimtab-promrw.yaml --now 2026-11-21T12:00:00Z --out - --no-state-write',
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=['trimtab'],
+)

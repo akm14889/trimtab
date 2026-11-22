@@ -1,0 +1,5 @@
+# Managed by Trimtab — DO NOT EDIT MANUALLY
+# Target: Prometheus remote_write[].write_relabel_configs (DESIGN §7.3)
+# Audit: 2026-11-21 | Coverage: 3/30d | Mode: PASS-THROUGH (0 drops synthesized) | Regrets: 0
+# No active drop rules (valid pass-through).
+write_relabel_configs: []
