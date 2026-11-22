@@ -1,0 +1,25 @@
+# Human-owned OpenTelemetry Collector base configuration (wired ONCE).
+# Run with: otelcol --config=file:otel-base.yaml --config=file:trimtab-rules.yaml
+# Trimtab owns ONLY trimtab-rules.yaml and NEVER emits a `service:` block.
+
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: app
+          static_configs:
+            - targets: ["localhost:9090"]
+
+processors:
+  batch: {}
+
+exporters:
+  prometheusremotewrite:
+    endpoint: https://mimir.example.com/api/v1/push
+
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      processors: [filter/trimtab, batch] # One-time insertion point
+      exporters: [prometheusremotewrite]

@@ -1,0 +1,21 @@
+// Managed by Trimtab — DO NOT EDIT MANUALLY
+// Audit: 2026-11-21 | Coverage: 30/30d | Tranche 1 of 1 (8.5% series) | Regrets: 0
+declare "drop_unused" {
+  argument "forward_to" {
+    optional = false
+  }
+  export "receiver" {
+    value = prometheus.relabel.trimtab_drop.receiver
+  }
+
+  prometheus.relabel "trimtab_drop" {
+    forward_to = argument.forward_to.value
+
+    // Prometheus/Alloy relabel regexes are implicitly anchored.
+    rule {
+      source_labels = ["__name__"]
+      regex         = "api_request_duration_seconds_bucket"
+      action        = "drop"
+    }
+  }
+}

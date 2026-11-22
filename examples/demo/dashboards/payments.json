@@ -1,0 +1,26 @@
+{
+  "uid": "payments-slo",
+  "title": "Payments Latency & SLO",
+  "folderTitle": "Payments",
+  "tags": ["prod", "payments"],
+  "panels": [
+    {
+      "title": "P95 Latency by Service",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, service) (rate(payments_http_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{service}} ({{status}})"
+        }
+      ]
+    },
+    {
+      "title": "HTTP Throughput",
+      "targets": [
+        {
+          "expr": "rate(http_requests_total[$__rate_interval])",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    }
+  ]
+}

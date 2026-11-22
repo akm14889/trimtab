@@ -1,0 +1,19 @@
+[
+  {
+    "uid": "graf-alert-billing",
+    "title": "BillingPipelineStalled",
+    "ruleGroup": "billing",
+    "folderUID": "billing-folder",
+    "annotations": {
+      "summary": "Zero invoices processed in cluster {{ $labels.cluster }}"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "model": {
+          "expr": "sum by (cluster) (rate(billing_invoices_total[15m])) == 0"
+        }
+      }
+    ]
+  }
+]

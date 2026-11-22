@@ -1,0 +1,6 @@
+{"params":{"query":"rate(http_requests_total[5m])"},"httpRequest":{"clientIP":"10.0.10.2","method":"GET","path":"/api/v1/query_range","headers":{"User-Agent":"Grafana/11.3"}},"ts":"2026-10-22T12:00:00Z"}
+{"params":{"query":"histogram_quantile(0.95, sum by (le, service) (rate(payments_http_duration_seconds_bucket[5m])))"},"httpRequest":{"clientIP":"10.0.10.2","method":"GET","path":"/api/v1/query_range","headers":{"User-Agent":"Grafana/11.3"}},"ts":"2026-10-28T09:00:00Z"}
+{"params":{"query":"histogram_quantile(0.95, orders:live_latency:rate5m)"},"httpRequest":{"clientIP":"10.0.10.2","method":"GET","path":"/api/v1/query_range","headers":{"User-Agent":"Grafana/11.3"}},"ts":"2026-11-05T15:00:00Z"}
+{"params":{"query":"sum by (le, service) (rate(orders_deprecated_latency_seconds_bucket[5m])) or vector(0)"},"ruleGroup":{"file":"rules/orders-legacy.yaml","name":"orders_legacy"},"ts":"2026-11-12T08:00:00Z"}
+{"params":{"query":"histogram_quantile(0.99, orders:deprecated_latency:rate5m)"},"ruleGroup":{"file":"rules/orders-legacy.yaml","name":"orders_legacy"},"ts":"2026-11-12T08:01:00Z"}
+{"params":{"query":"count({__name__=~\".+\"})"},"httpRequest":{"clientIP":"10.0.99.9","method":"GET","path":"/api/v1/query","headers":{"User-Agent":"cardinality-explorer/1.0"}},"ts":"2026-11-14T10:00:00Z"}

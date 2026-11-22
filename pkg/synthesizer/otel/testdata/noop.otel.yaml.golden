@@ -1,0 +1,10 @@
+# Managed by Trimtab — DO NOT EDIT MANUALLY
+# Never defines `service:` so user pipeline lists are never overwritten.
+# Audit: 2026-11-21 | Coverage: 3/30d | Mode: NO-OP (0 drops synthesized) | Regrets: 0
+processors:
+  filter/trimtab:
+    error_mode: ignore
+    metrics:
+      metric:
+        # No active drops — valid non-matching OTTL predicate (never empty {})
+        - 'name == "__trimtab_noop__"'

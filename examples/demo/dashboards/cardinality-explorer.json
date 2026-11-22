@@ -1,0 +1,16 @@
+{
+  "uid": "card-explorer",
+  "title": "Cardinality Explorer",
+  "folderTitle": "Observability Meta",
+  "tags": ["explorer", "meta"],
+  "panels": [
+    {
+      "title": "Top Series By Metric Name",
+      "targets": [
+        {
+          "expr": "topk(20, count by (__name__) ({__name__=~\".+\"}))"
+        }
+      ]
+    }
+  ]
+}

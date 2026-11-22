@@ -1,0 +1,22 @@
+// Human-owned Grafana Alloy configuration (wired ONCE).
+// Trimtab never edits this file; Trimtab manages only ./out/trimtab.alloy.
+
+import.file "trimtab" {
+  filename = "/etc/alloy/trimtab.alloy"
+}
+
+trimtab.drop_unused "default" {
+  forward_to = [prometheus.remote_write.prod.receiver]
+}
+
+// Route either prometheus.scrape or otelcol.exporter.prometheus through trimtab.drop_unused.default.receiver:
+prometheus.scrape "app" {
+  targets    = [{"__address__" = "localhost:9090"}]
+  forward_to = [trimtab.drop_unused.default.receiver]
+}
+
+prometheus.remote_write "prod" {
+  endpoint {
+    url = "https://mimir.example.com/api/v1/push"
+  }
+}

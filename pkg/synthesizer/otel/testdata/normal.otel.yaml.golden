@@ -1,0 +1,12 @@
+# Managed by Trimtab — DO NOT EDIT MANUALLY
+# Never defines `service:` so user pipeline lists are never overwritten.
+# Audit: 2026-11-21 | Coverage: 30/30d | Tranche 1 of 4 (14.8% series) | Regrets: 0
+processors:
+  filter/trimtab:
+    error_mode: ignore
+    metrics:
+      metric:
+        # 0 live consumers in 30d | 42800 series | Tranche 1 of 4
+        - 'name == "checkout_legacy_cart_gauge"'
+        # dead recording-rule chain (2 rules) | 15068 series | Tranche 1 of 4
+        - 'name == "orders.deprecated.latency"'

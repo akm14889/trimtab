@@ -1,0 +1,11 @@
+groups:
+  - name: checkout_alerts
+    rules:
+      - alert: HighCheckoutErrorRate
+        expr: sum by (service) (rate(checkout_errors_total[5m])) > 5
+        annotations:
+          summary: "Elevated checkout errors in {{ $labels.cluster }}"
+  - name: orders_live
+    rules:
+      - record: orders:live_latency:rate5m
+        expr: sum by (le, service) (rate(orders_live_latency_seconds_bucket[5m]))

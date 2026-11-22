@@ -1,0 +1,19 @@
+# Binaries
+/bin/
+/trimtab
+/out/
+
+# Go build/test artifacts
+*.test
+*.out
+coverage.txt
+
+# Local state files generated during ad-hoc runs
+.trimtab-state.json
+examples/demo/.trimtab-state.json
+examples/demo/out/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/

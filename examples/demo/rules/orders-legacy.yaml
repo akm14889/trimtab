@@ -1,0 +1,7 @@
+groups:
+  - name: orders_legacy
+    rules:
+      - record: orders:deprecated_latency:rate5m
+        expr: sum by (le, service) (rate(orders_deprecated_latency_seconds_bucket[5m])) or vector(0)
+      - record: orders:deprecated_latency:p99
+        expr: histogram_quantile(0.99, orders:deprecated_latency:rate5m)
