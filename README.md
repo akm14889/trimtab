@@ -99,6 +99,7 @@ Trimtab's `trimtab-rules.yaml` **never** emits a `service:` block, **never** heu
 
 ## Documentation
 
+- [docs/LOCAL_DEV.md](docs/LOCAL_DEV.md) — Local development & Kind/Tilt Kubernetes setup (including NixOS prerequisites)
 - [docs/DESIGN.md](docs/DESIGN.md) — Full architecture, rationale, invariants, and phased roadmap
 - [AGENT.md](AGENT.md) — High-signal guide & safety invariants for engineering/agent sessions
 - [docs/CHECKPOINT.md](docs/CHECKPOINT.md) — Living progress checkpoint & session handoff tracker

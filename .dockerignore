@@ -1,0 +1,12 @@
+.git/
+bin/
+out/
+examples/demo/out/
+examples/demo/.trimtab-state.json
+.trimtab-state.json
+*.test
+*.out
+coverage.txt
+.DS_Store
+.idea/
+.vscode/
