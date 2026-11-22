@@ -31,6 +31,9 @@ make demo
 # Try the OpenTelemetry Collector target (Phase 1.1)
 make demo-otel
 
+# Try the Prometheus remote_write target (Phase 2.1)
+make demo-promrw
+
 # Render Markdown report (great for CI / PR comments)
 make demo-markdown
 ```
@@ -48,8 +51,9 @@ trimtab analyze --config trimtab.yaml --format markdown
 trimtab analyze --config trimtab.yaml --format json
 
 # Synthesize collector rules directly (to file or stdout with --out -)
-trimtab synth --config trimtab.yaml --target alloy --out ./out/trimtab.alloy
-trimtab synth --config trimtab.yaml --target otel  --out ./out/trimtab-rules.yaml
+trimtab synth --config trimtab.yaml --target alloy  --out ./out/trimtab.alloy
+trimtab synth --config trimtab.yaml --target otel   --out ./out/trimtab-rules.yaml
+trimtab synth --config trimtab.yaml --target promrw --out ./out/trimtab-remote-write.yaml
 
 # Acknowledge an intentional >20% drop in dashboard/rule counts
 trimtab analyze --config trimtab.yaml --accept-baseline-shift
@@ -95,11 +99,27 @@ otelcol --config=file:otel-base.yaml --config=file:trimtab-rules.yaml
 ```
 Trimtab's `trimtab-rules.yaml` **never** emits a `service:` block, **never** heuristically reverse-translates Prometheus names to OTLP names, and emits `'name == "__trimtab_noop__"'` when 0 drops are active. See [examples/demo/otel-base.yaml.example](examples/demo/otel-base.yaml.example).
 
+### 3. Prometheus `remote_write` (`write_relabel_configs` — Phase 2.1)
+
+Trimtab synthesizes `write_relabel_configs` overlays (standalone `relabel_configs`, `remote_write` entries, or camelCase `monitoring.coreos.com/v1` Prometheus Operator strategic-merge patches) without modifying your base `prometheus.yml`:
+
+```yaml
+remote_write:
+  - name: prod-mimir
+    url: https://mimir.example.com/api/v1/push
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: "checkout_legacy_cart_gauge|orders_deprecated_latency_seconds_(bucket|sum|count|created)"
+        action: drop
+```
+See [examples/demo/prometheus-remote-write.yaml.example](examples/demo/prometheus-remote-write.yaml.example).
+
 ---
 
 ## Documentation
 
 - [docs/LOCAL_DEV.md](docs/LOCAL_DEV.md) — Local development & Kind/Tilt Kubernetes setup (including NixOS prerequisites)
 - [docs/DESIGN.md](docs/DESIGN.md) — Full architecture, rationale, invariants, and phased roadmap
+- [docs/PLAN.md](docs/PLAN.md) — Living iterative implementation plan across all phases (P2.2–P3.5)
 - [AGENT.md](AGENT.md) — High-signal guide & safety invariants for engineering/agent sessions
 - [docs/CHECKPOINT.md](docs/CHECKPOINT.md) — Living progress checkpoint & session handoff tracker

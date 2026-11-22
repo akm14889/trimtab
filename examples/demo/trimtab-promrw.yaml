@@ -1,0 +1,37 @@
+name: prod-metrics-promrw
+statePath: .trimtab-state-promrw.json
+
+inventory:
+  fixturePath: inventory.json
+  namingMode: prometheus_receiver
+  enableCollapseQueries: true
+  maxCollapseFamilies: 25
+
+usage:
+  queryLogs:
+    - glob: "querylogs/prom-replica-*.jsonl"
+      format: prometheus
+  grafana:
+    dashboardsDir: dashboards
+    alertRulesPath: grafana-alerts.json
+    enableManagedAlerts: true
+  promRules:
+    - "rules/*.yaml"
+
+policy:
+  minObservationWindow: 30d
+  soakWindow: 7d
+  maxDropPercentPerTranche: 15.0
+  maxTotalDroppablePercent: 80.0
+  baselineDriftThresholdPercent: 20.0
+  wildcardThresholdPercent: 50.0
+  regretThreshold: 1
+  excludeSources:
+    - type: dashboard_title
+      value: "Cardinality Explorer"
+    - type: query_caller
+      value: "cardinality-explorer"
+
+synthesizer:
+  target: promrw
+  outputPath: out/trimtab-remote-write.yaml

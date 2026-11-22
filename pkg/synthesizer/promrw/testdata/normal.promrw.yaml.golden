@@ -1,0 +1,9 @@
+# Managed by Trimtab — DO NOT EDIT MANUALLY
+# Target: Prometheus remote_write[].write_relabel_configs (DESIGN §7.3)
+# Audit: 2026-11-21 | Coverage: 30/30d | Tranche 1 of 4 (14.8% series) | Regrets: 0
+write_relabel_configs:
+  # Prometheus relabel regexes are implicitly anchored.
+  - source_labels:
+      - __name__
+    regex: "checkout_legacy_cart_gauge|orders_deprecated_latency_seconds_(bucket|sum|count|created)"
+    action: drop

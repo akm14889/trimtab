@@ -18,6 +18,7 @@ import (
 func TestCLI_DemoAnalyzeAndSynthEndToEnd(t *testing.T) {
 	demoCfg := filepath.Join("..", "..", "examples", "demo", "trimtab.yaml")
 	demoOTelCfg := filepath.Join("..", "..", "examples", "demo", "trimtab-otel.yaml")
+	demoPromRWCfg := filepath.Join("..", "..", "examples", "demo", "trimtab-promrw.yaml")
 	tmpDir := t.TempDir()
 	nowFlag := "2026-11-21T12:00:00Z"
 
@@ -174,6 +175,63 @@ func TestCLI_DemoAnalyzeAndSynthEndToEnd(t *testing.T) {
 		}
 		if !updated.IsPinnedNeverDrop("http_requests_total") {
 			t.Fatal("http_requests_total should be pinned to neverDrop after regret")
+		}
+	})
+
+	t.Run("synth demo Prometheus remote_write target", func(t *testing.T) {
+		promRWOut := filepath.Join(tmpDir, "trimtab-remote-write.yaml")
+		var out, errBuf bytes.Buffer
+		code := run([]string{
+			"synth",
+			"--config", demoPromRWCfg,
+			"--out", promRWOut,
+			"--state", filepath.Join(tmpDir, "state-promrw.json"),
+			"--now", nowFlag,
+		}, &out, &errBuf)
+		if code != 0 {
+			t.Fatalf("synth promrw failed: code=%d stderr=%s", code, errBuf.String())
+		}
+		raw, err := os.ReadFile(promRWOut)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			WriteRelabelConfigs []struct {
+				SourceLabels []string `yaml:"source_labels"`
+				Regex        string   `yaml:"regex"`
+				Action       string   `yaml:"action"`
+			} `yaml:"write_relabel_configs"`
+		}
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("invalid promrw YAML: %v\n%s", err, string(raw))
+		}
+		if len(doc.WriteRelabelConfigs) != 1 {
+			t.Fatalf("expected 1 write_relabel_configs rule, got %d", len(doc.WriteRelabelConfigs))
+		}
+		rx := doc.WriteRelabelConfigs[0].Regex
+		if !strings.Contains(rx, "checkout_legacy_cart_gauge") ||
+			!strings.Contains(rx, "orders_deprecated_latency_seconds_(bucket|sum|count|created)") {
+			t.Fatalf("promrw output missing expected Tranche 1 drops: %q", rx)
+		}
+	})
+
+	t.Run("analyze demo with --target promrw override", func(t *testing.T) {
+		promRWOut := filepath.Join(tmpDir, "override-remote-write.yaml")
+		var out, errBuf bytes.Buffer
+		code := run([]string{
+			"analyze",
+			"--config", demoCfg,
+			"--target", "promrw",
+			"--out", promRWOut,
+			"--no-state-write",
+			"--state", filepath.Join(tmpDir, "missing-promrw.json"),
+			"--now", nowFlag,
+		}, &out, &errBuf)
+		if code != 0 {
+			t.Fatalf("analyze --target promrw failed: code=%d stderr=%s", code, errBuf.String())
+		}
+		if !strings.Contains(out.String(), "Synthesized Prometheus remote_write rules ->") {
+			t.Fatalf("expected Prometheus remote_write rules footer in report:\n%s", out.String())
 		}
 	})
 }

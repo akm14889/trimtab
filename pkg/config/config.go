@@ -210,8 +210,20 @@ type ExcludeSource struct {
 }
 
 type SynthesizerConfig struct {
-	Target     string `yaml:"target" json:"target"`         // "alloy" (default) or "otel"
-	OutputPath string `yaml:"outputPath" json:"outputPath"` // optional output path
+	Target     string        `yaml:"target" json:"target"`         // "alloy" (default), "otel", or "promrw"
+	OutputPath string        `yaml:"outputPath" json:"outputPath"` // optional output path
+	PromRW     *PromRWConfig `yaml:"promRW,omitempty" json:"promRW,omitempty"`
+}
+
+// PromRWConfig configures Prometheus remote_write[].write_relabel_configs synthesis.
+type PromRWConfig struct {
+	Mode              string `yaml:"mode,omitempty" json:"mode,omitempty"`                           // "relabel_configs" (default), "remote_write", or "prometheus_operator_patch"
+	RemoteWriteName   string `yaml:"remoteWriteName,omitempty" json:"remoteWriteName,omitempty"`     // optional remote_write[].name
+	RemoteWriteURL    string `yaml:"remoteWriteURL,omitempty" json:"remoteWriteURL,omitempty"`       // optional remote_write[].url (required for prometheus_operator_patch)
+	OperatorKind      string `yaml:"operatorKind,omitempty" json:"operatorKind,omitempty"`           // "Prometheus" (default) or "PrometheusAgent"
+	OperatorName      string `yaml:"operatorName,omitempty" json:"operatorName,omitempty"`           // metadata.name (default "prometheus")
+	OperatorNamespace string `yaml:"operatorNamespace,omitempty" json:"operatorNamespace,omitempty"` // optional metadata.namespace
+	MaxTermsPerRule   int    `yaml:"maxTermsPerRule,omitempty" json:"maxTermsPerRule,omitempty"`     // default 40
 }
 
 // EffectiveRegretThreshold returns the active threshold (default 1 per Invariant #10).
@@ -311,6 +323,20 @@ func (c *Config) ApplyDefaults() {
 	if c.Synthesizer.Target == "" {
 		c.Synthesizer.Target = def.Synthesizer.Target
 	}
+	if c.Synthesizer.PromRW != nil {
+		if c.Synthesizer.PromRW.Mode == "" {
+			c.Synthesizer.PromRW.Mode = "relabel_configs"
+		}
+		if c.Synthesizer.PromRW.OperatorKind == "" {
+			c.Synthesizer.PromRW.OperatorKind = "Prometheus"
+		}
+		if c.Synthesizer.PromRW.OperatorName == "" {
+			c.Synthesizer.PromRW.OperatorName = "prometheus"
+		}
+		if c.Synthesizer.PromRW.MaxTermsPerRule == 0 {
+			c.Synthesizer.PromRW.MaxTermsPerRule = 40
+		}
+	}
 	for i := range c.Usage.QueryLogs {
 		if c.Usage.QueryLogs[i].Format == "" {
 			c.Usage.QueryLogs[i].Format = "auto"
@@ -365,9 +391,30 @@ func (c *Config) Validate() error {
 		}
 	}
 	switch strings.ToLower(c.Synthesizer.Target) {
-	case "alloy", "otel":
+	case "alloy", "otel", "promrw", "prometheus-remote-write":
 	default:
-		return fmt.Errorf("unsupported synthesizer.target %q (expected \"alloy\" or \"otel\")", c.Synthesizer.Target)
+		return fmt.Errorf("unsupported synthesizer.target %q (expected \"alloy\", \"otel\", or \"promrw\")", c.Synthesizer.Target)
+	}
+	if prw := c.Synthesizer.PromRW; prw != nil {
+		switch prw.Mode {
+		case "", "relabel_configs", "remote_write", "prometheus_operator_patch":
+		default:
+			return fmt.Errorf("unsupported synthesizer.promRW.mode %q (expected \"relabel_configs\", \"remote_write\", or \"prometheus_operator_patch\")", prw.Mode)
+		}
+		if prw.Mode == "remote_write" && prw.RemoteWriteURL == "" && prw.RemoteWriteName == "" {
+			return errors.New("synthesizer.promRW requires remoteWriteURL or remoteWriteName when mode is \"remote_write\"")
+		}
+		if prw.Mode == "prometheus_operator_patch" {
+			if prw.RemoteWriteURL == "" {
+				return errors.New("synthesizer.promRW.remoteWriteURL is required when mode is \"prometheus_operator_patch\"")
+			}
+			if prw.OperatorKind != "" && prw.OperatorKind != "Prometheus" && prw.OperatorKind != "PrometheusAgent" {
+				return fmt.Errorf("unsupported synthesizer.promRW.operatorKind %q (expected \"Prometheus\" or \"PrometheusAgent\")", prw.OperatorKind)
+			}
+		}
+		if prw.MaxTermsPerRule < 0 {
+			return fmt.Errorf("synthesizer.promRW.maxTermsPerRule must be >= 0, got %d", prw.MaxTermsPerRule)
+		}
 	}
 	return nil
 }

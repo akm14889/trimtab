@@ -207,8 +207,11 @@ func renderTable(rep *metrics.AuditReport) string {
 	if rep.SynthesizedOutputPath != "" {
 		b.WriteString("\n")
 		label := "Alloy module"
-		if strings.EqualFold(rep.Target, "otel") {
+		switch strings.ToLower(rep.Target) {
+		case "otel":
 			label = "OTel Collector rules"
+		case "promrw", "prometheus-remote-write":
+			label = "Prometheus remote_write rules"
 		}
 		if rep.Safety.ReportOnly || rep.Safety.Blocked {
 			fmt.Fprintf(&b, "Synthesized %s -> %s (pass-through / no-op: 0 families dropped)\n",

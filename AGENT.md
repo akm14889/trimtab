@@ -16,13 +16,13 @@
 
 ## 2. Current Status & Delivery Order
 
-- **Current State:** **Phase 1 (Metrics CLI MVP + Grafana Alloy)** and **Phase 1.1 (OpenTelemetry Collector Synthesizer + Loki Query-Log Source)** are **implemented and verified** (`go test -race ./... && go build ./cmd/trimtab` passes with 10/10 Mandatory Safety Test Matrix invariants and golden tests green). See [docs/CHECKPOINT.md](docs/CHECKPOINT.md) for exact package inventory and Phase 2 handoff plan.
-- **Phase 1 + 1.1 (Completed):**
+- **Current State:** **Phase 1 (Metrics CLI MVP + Grafana Alloy)**, **Phase 1.1 (OpenTelemetry Collector Synthesizer + Loki Query-Log Source)**, and **Phase 2.1 (Prometheus `remote_write` Synthesizer)** are **implemented and verified** (`go test -race ./... && go build ./cmd/trimtab` passes with 10/10 Mandatory Safety Test Matrix invariants and golden tests green). See [docs/CHECKPOINT.md](docs/CHECKPOINT.md) for exact package inventory and [docs/PLAN.md](docs/PLAN.md) for the single living implementation plan.
+- **Phase 1 + 1.1 + 2.1 (Completed):**
   1. Core Metrics engine (family-level modeling) + PromQL AST extractor (`prometheus/prometheus/promql/parser` v0.316.0) + State Ledger (cold-start coverage, baselines, observation window, tranches, `active_drops`) + Regret Detection.
   2. Usage sources: **Globbed Prometheus query logs** (`+ prom-analytics-proxy` + **Loki-backed query-log source**), **Grafana dashboards + Grafana-managed alerts** (API + local JSON), **Prometheus rule files** (with recording-rule transitive DAG).
-  3. **Synthesizers:** **Grafana Alloy (`import.file` module)** (`pkg/synthesizer/alloy`) AND **OpenTelemetry Collector (`filter/trimtab` via `--config` insertion point)** (`pkg/synthesizer/otel`).
-  4. Screenshot-able CLI report (`trimtab analyze`, `trimtab synth`, `trimtab version`) in `table`, `markdown`, and `json` + bundled offline demo fixtures (`examples/demo/`, `make demo`, `make demo-otel`).
-- **Phase 2 (Next Build Target):** Per-team attribution & budgets ("OpenCost for telemetry"), K8s Operator & CRDs (`trimtab.io/v1alpha1`), GitOps PRs (tranched drops, dead rule cleanup, automated Regret Revert PRs), multi-cluster scoping, Prometheus `remote_write[].write_relabel_configs`, additional usage sources (KEDA, `prometheus-adapter`, Argo Rollouts/Flagger, Alertmanager, Perses, Sloth/Pyrra, Mimir/Thanos Ruler API).
+  3. **Synthesizers:** **Grafana Alloy (`import.file` module)** (`pkg/synthesizer/alloy`), **OpenTelemetry Collector (`filter/trimtab` via `--config` insertion point)** (`pkg/synthesizer/otel`), AND **Prometheus `remote_write` (`write_relabel_configs` / `remote_write` / Operator patch)** (`pkg/synthesizer/promrw`).
+  4. Screenshot-able CLI report (`trimtab analyze`, `trimtab synth`, `trimtab version`) in `table`, `markdown`, and `json` + bundled offline demo fixtures (`examples/demo/`, `make demo`, `make demo-otel`, `make demo-promrw`).
+- **Phase 2 (Remaining Build Targets — P2.2–P2.7 in [docs/PLAN.md](docs/PLAN.md)):** Additional usage sources (Mimir/Thanos Ruler API, KEDA, `prometheus-adapter`, Argo Rollouts/Flagger, Alertmanager, Perses, Sloth/Pyrra), per-team attribution & budgets ("OpenCost for telemetry"), GitOps PRs (tranched drops, dead rule cleanup, automated Regret Revert PRs), K8s Operator & CRDs (`trimtab.io/v1alpha1`), and multi-cluster scoping.
 - **Phase 3 (Later):** Shard-safe aggregation synthesizer, direct Alloy config import add-on, Logs (`pkg/logs`), Traces (`pkg/traces`), OpAMP break-glass.
 
 ---
@@ -65,6 +65,10 @@ Never emit standalone snippets that cannot load in a real collector.
   - **NEVER heuristically reverse-translate Prometheus names to OTLP names** (underscore escaping is lossy and ambiguous). Only emit OTel drops when names are deterministically verified (Prometheus receiver, Prometheus 3 `NoTranslation` UTF-8, or exact mapping); otherwise skip with advisory warning.
   - When 0 families are dropped: emit a valid non-matching OTTL predicate (`'name == "__trimtab_noop__"'`), never an empty `{}` map.
   - Capabilities: `CanDropFamily: true`, `CanDropHistogramBucketsOnly: false`.
+- **Prometheus `remote_write` (`pkg/synthesizer/promrw` — Phase 2.1):**
+  - Emits `write_relabel_configs` overlays (`relabel_configs` default, `remote_write` entry, or camelCase `monitoring.coreos.com/v1` `prometheus_operator_patch`) sharing Prometheus relabel regex generation via `pkg/synthesizer/relabel.go`.
+  - When 0 families are dropped: emits `write_relabel_configs: []` (or `writeRelabelConfigs: []` in operator patch mode).
+  - Capabilities: `CanDropFamily: true`, `CanDropHistogramBucketsOnly: true`.
 
 ---
 
@@ -84,6 +88,7 @@ Never emit standalone snippets that cannot load in a real collector.
 | `pkg/engine/` | `family.go` (classic/native histogram & summary grouper), `dag.go` (recording-rule transitive closure + dead-chain advisory), `analyzer.go` (correlator, cold-start gating, `without` collapse), `safety.go` (baselines, `neverDrop`, wildcards, tranche planner), `regret.go` (forward-only Regret Detection). |
 | `pkg/synthesizer/alloy/` | Phase 1 (1st): Grafana Alloy `import.file` module generator (`trimtab.alloy`). |
 | `pkg/synthesizer/otel/` | Phase 1.1 (CNCF Target): OTel Collector `filter/trimtab` generator (`trimtab-rules.yaml`). |
+| `pkg/synthesizer/promrw/` | Phase 2.1: Prometheus `remote_write[].write_relabel_configs` & Operator patch generator. |
 | `pkg/report/` | Screenshot-able terminal summary table, Markdown, and JSON renderers. |
 | `examples/demo/` | Self-contained offline fixture dataset demonstrating tranched rollout, dead rule chain, `without` label collapse, and regret check. |
 
@@ -105,6 +110,7 @@ Never emit standalone snippets that cannot load in a real collector.
   8. `sum without (pod)`, bare `rate(x[5m])`, `label_replace`, Grafana `legendFormat`, alert `{{ $labels.x }}` ⇒ labels marked used.
   9. `le` and `quantile` ⇒ never suggested in advisory label drops; single-label `without (pod_uid)` honestly shows `0%` collapse when `pod` remains.
   10. `api-user` query hits a metric in `active_drops` ⇒ `RegretEvent` emitted, metric removed from drops & pinned to `neverDrop`, next tranche blocked.
+- **Living Plan & Checkpoint Convention:** Never create per-phase plan files (`PHASE2_PLAN.md`, `PHASE3_PLAN.md`, etc.). Append and refine all upcoming phases/sub-phases inside [docs/PLAN.md](docs/PLAN.md), and keep [docs/CHECKPOINT.md](docs/CHECKPOINT.md) updated after each completed sub-phase.
 - **Verification Command:** `go test -race ./... && go build ./cmd/trimtab`
 
 ---

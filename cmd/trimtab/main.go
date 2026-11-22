@@ -18,6 +18,7 @@ import (
 	"trimtab.io/trimtab/pkg/synthesizer"
 	"trimtab.io/trimtab/pkg/synthesizer/alloy"
 	"trimtab.io/trimtab/pkg/synthesizer/otel"
+	"trimtab.io/trimtab/pkg/synthesizer/promrw"
 	"trimtab.io/trimtab/pkg/usage/grafana"
 	"trimtab.io/trimtab/pkg/usage/promrules"
 	"trimtab.io/trimtab/pkg/usage/querylog"
@@ -61,18 +62,18 @@ func printUsage(w io.Writer) {
 
 Usage:
   trimtab analyze --config <trimtab.yaml> [flags]   Audit usage, run safety gates, print report, and optionally synthesize rules
-  trimtab synth   --config <trimtab.yaml> [flags]   Synthesize collector drop rules (Alloy or OTel Collector)
+  trimtab synth   --config <trimtab.yaml> [flags]   Synthesize collector drop rules (Alloy, OTel Collector, or Prometheus remote_write)
   trimtab version                                   Print Trimtab version
 
 Common Flags:
-  --config <path>           Path to trimtab.yaml (default "trimtab.yaml")
-  --target <alloy|otel>     Override synthesizer target ("alloy" or "otel")
-  --out <path>              Output file path for synthesized rules (use "-" for stdout in synth mode)
-  --format <fmt>            Report format for analyze: table | markdown | json (default "table")
-  --state <path>            Override State Ledger (.trimtab-state.json) path
-  --accept-baseline-shift   Acknowledge >20% source object count drop and update baseline
-  --no-state-write          Do not persist updates to the State Ledger (dry-run)
-  --now <RFC3339>           Override evaluation timestamp (for deterministic CI / demo runs)`)
+  --config <path>                Path to trimtab.yaml (default "trimtab.yaml")
+  --target <alloy|otel|promrw>   Override synthesizer target ("alloy", "otel", or "promrw")
+  --out <path>                   Output file path for synthesized rules (use "-" for stdout in synth mode)
+  --format <fmt>                 Report format for analyze: table | markdown | json (default "table")
+  --state <path>                 Override State Ledger (.trimtab-state.json) path
+  --accept-baseline-shift        Acknowledge >20% source object count drop and update baseline
+  --no-state-write               Do not persist updates to the State Ledger (dry-run)
+  --now <RFC3339>                Override evaluation timestamp (for deterministic CI / demo runs)`)
 }
 
 func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
@@ -94,7 +95,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 		nowStr              string
 	)
 	fs.StringVar(&configPath, "config", "trimtab.yaml", "Path to trimtab.yaml")
-	fs.StringVar(&targetOverride, "target", "", "Override synthesizer target (alloy|otel)")
+	fs.StringVar(&targetOverride, "target", "", "Override synthesizer target (alloy|otel|promrw)")
 	fs.StringVar(&outOverride, "out", "", "Output path for synthesized drop rules")
 	fs.StringVar(&formatStr, "format", "table", "Report format: table, markdown, json")
 	fs.StringVar(&stateOverride, "state", "", "Override State Ledger path")
@@ -132,7 +133,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 		now = parsed.UTC()
 	}
 
-	syn, err := selectSynthesizer(cfg.Synthesizer.Target)
+	syn, err := selectSynthesizer(cfg.Synthesizer)
 	if err != nil {
 		fmt.Fprintf(stderr, "trimtab: %v\n", err)
 		return 1
@@ -255,14 +256,28 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 	return 0
 }
 
-func selectSynthesizer(target string) (synthesizer.Synthesizer, error) {
-	switch strings.ToLower(strings.TrimSpace(target)) {
+func selectSynthesizer(sc config.SynthesizerConfig) (synthesizer.Synthesizer, error) {
+	switch strings.ToLower(strings.TrimSpace(sc.Target)) {
 	case "", "alloy":
 		return alloy.New(), nil
 	case "otel":
 		return otel.New(), nil
+	case "promrw", "prometheus-remote-write":
+		var opts promrw.Options
+		if sc.PromRW != nil {
+			opts = promrw.Options{
+				Mode:              promrw.Mode(sc.PromRW.Mode),
+				RemoteWriteName:   sc.PromRW.RemoteWriteName,
+				RemoteWriteURL:    sc.PromRW.RemoteWriteURL,
+				OperatorKind:      sc.PromRW.OperatorKind,
+				OperatorName:      sc.PromRW.OperatorName,
+				OperatorNamespace: sc.PromRW.OperatorNamespace,
+				MaxTermsPerRule:   sc.PromRW.MaxTermsPerRule,
+			}
+		}
+		return promrw.New(opts), nil
 	default:
-		return nil, fmt.Errorf("unsupported synthesizer target %q (expected \"alloy\" or \"otel\")", target)
+		return nil, fmt.Errorf("unsupported synthesizer target %q (expected \"alloy\", \"otel\", or \"promrw\")", sc.Target)
 	}
 }
 
