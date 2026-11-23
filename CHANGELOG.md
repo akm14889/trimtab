@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.1-beta.3](https://github.com/akm14889/trimtab/compare/v0.0.1-beta.2...v0.0.1-beta.3) (2026-11-23)
+
+
+### Features
+
+* **chart:** add Helm chart, k8s manifests, and doctor command ([c0474bc](https://github.com/akm14889/trimtab/commit/c0474bc184480709ee90759628550403df3faf88))
+* harden safety analysis and expand usage scanners ([#10](https://github.com/akm14889/trimtab/issues/10)) ([c0474bc](https://github.com/akm14889/trimtab/commit/c0474bc184480709ee90759628550403df3faf88))
+
 ## [0.0.1-beta.2](https://github.com/akm14889/trimtab/compare/v0.0.1-beta.1...v0.0.1-beta.2) (2026-11-23)
 
 
