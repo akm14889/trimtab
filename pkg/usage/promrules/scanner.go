@@ -62,6 +62,11 @@ var (
 	orVectorZeroRe = regexp.MustCompile(`(?i)\bor\b[^\n]*\bvector\s*\(\s*0(?:\.0+)?\s*\)`)
 )
 
+// HasOrVectorZero reports whether expr contains `or vector(0)` (Invariant #8).
+func HasOrVectorZero(expr string) bool {
+	return orVectorZeroRe.MatchString(expr)
+}
+
 // ExtractTemplateLabels extracts Prometheus Go template label references (Invariant #8).
 func ExtractTemplateLabels(texts ...string) []string {
 	seen := make(map[string]struct{})

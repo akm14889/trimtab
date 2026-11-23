@@ -1,0 +1,65 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: trimtab-analyze
+  labels:
+    app.kubernetes.io/name: trimtab
+    app.kubernetes.io/component: control-plane
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: trimtab
+            app.kubernetes.io/component: control-plane
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: trimtab
+              image: ghcr.io/trimtab-io/trimtab:latest
+              imagePullPolicy: IfNotPresent
+              args:
+                - analyze
+                - --config
+                - /etc/trimtab/trimtab.yaml
+              envFrom:
+                - secretRef:
+                    name: trimtab-credentials
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/trimtab
+                  readOnly: true
+                - name: state
+                  mountPath: /var/lib/trimtab
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          volumes:
+            - name: config
+              configMap:
+                name: trimtab-config
+            - name: state
+              persistentVolumeClaim:
+                claimName: trimtab-state

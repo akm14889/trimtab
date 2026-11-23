@@ -163,30 +163,40 @@ func walkBinary(n *parser.BinaryExpr, ctx evalContext, res *ExtractResult) {
 	lhsCtx := ctx.clone()
 	rhsCtx := ctx.clone()
 
-	if vm := n.VectorMatching; vm != nil {
-		if vm.On {
-			// on (a, b) explicitly uses a and b on both operands.
-			lhsCtx.addExplicit(vm.MatchingLabels...)
-			rhsCtx.addExplicit(vm.MatchingLabels...)
-		} else if len(vm.MatchingLabels) > 0 {
-			// ignoring (c) matches on ALL labels except c on both operands.
-			applyWithoutMatching(&lhsCtx, vm.MatchingLabels)
-			applyWithoutMatching(&rhsCtx, vm.MatchingLabels)
+	isVecVec := n.LHS != nil && n.RHS != nil &&
+		n.LHS.Type() == parser.ValueTypeVector &&
+		n.RHS.Type() == parser.ValueTypeVector
+
+	if isVecVec {
+		if vm := n.VectorMatching; vm != nil {
+			if vm.On {
+				// on (a, b) explicitly uses a and b on both operands.
+				lhsCtx.addExplicit(vm.MatchingLabels...)
+				rhsCtx.addExplicit(vm.MatchingLabels...)
+			} else if len(vm.MatchingLabels) > 0 {
+				// ignoring (c) matches on ALL labels except c on both operands.
+				applyWithoutMatching(&lhsCtx, vm.MatchingLabels)
+				applyWithoutMatching(&rhsCtx, vm.MatchingLabels)
+			} else {
+				// Default vector-to-vector matching aligns on ALL labels of both operands.
+				lhsCtx.preservesAll = true
+				rhsCtx.preservesAll = true
+			}
+
+			// group_left(extra...) pulls extra labels from RHS; group_right(extra...) pulls from LHS.
+			switch vm.Card {
+			case parser.CardManyToOne:
+				rhsCtx.addExplicit(vm.Include...)
+			case parser.CardOneToMany:
+				lhsCtx.addExplicit(vm.Include...)
+			default:
+				lhsCtx.addExplicit(vm.Include...)
+				rhsCtx.addExplicit(vm.Include...)
+			}
 		} else {
-			// Default vector-to-vector matching aligns on ALL labels of both operands.
+			// Vector-to-vector binary expression without VectorMatching aligns on all labels.
 			lhsCtx.preservesAll = true
 			rhsCtx.preservesAll = true
-		}
-
-		// group_left(extra...) pulls extra labels from RHS; group_right(extra...) pulls from LHS.
-		switch vm.Card {
-		case parser.CardManyToOne:
-			rhsCtx.addExplicit(vm.Include...)
-		case parser.CardOneToMany:
-			lhsCtx.addExplicit(vm.Include...)
-		default:
-			lhsCtx.addExplicit(vm.Include...)
-			rhsCtx.addExplicit(vm.Include...)
 		}
 	}
 

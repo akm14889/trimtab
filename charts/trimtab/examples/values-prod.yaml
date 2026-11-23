@@ -1,0 +1,48 @@
+# Hardened production override targeting Grafana Alloy (`import.file` / `mode: module`).
+# Expects a Secret named `trimtab-credentials` with `PROMETHEUS_BEARER_TOKEN` and `GRAFANA_API_KEY`.
+
+cronjob:
+  schedule: "0 */6 * * *"
+  reportFormat: json
+
+persistence:
+  size: 2Gi
+
+envFrom:
+  - secretRef:
+      name: trimtab-credentials
+
+# Uncomment to mount custom CA / mTLS certificates:
+# extraVolumes:
+#   - name: backend-tls
+#     secret:
+#       secretName: trimtab-backend-tls
+# extraVolumeMounts:
+#   - name: backend-tls
+#     mountPath: /etc/trimtab/certs
+#     readOnly: true
+
+config:
+  name: trimtab-prod
+  inventory:
+    prometheusURL: https://prometheus.monitoring.svc:9090
+    probeFirstSeen: false
+    auth:
+      bearerTokenEnv: PROMETHEUS_BEARER_TOKEN
+      # tls:
+      #   caFile: /etc/trimtab/certs/ca.crt
+  usage:
+    grafana:
+      url: https://grafana.monitoring.svc:443
+      auth:
+        bearerTokenEnv: GRAFANA_API_KEY
+  policy:
+    minObservationWindow: 30d
+    soakWindow: 7d
+    soakStartMode: observed
+  synthesizer:
+    target: alloy
+    outputPath: /var/lib/trimtab/trimtab.alloy
+    alloy:
+      mode: module
+      maxTermsPerRule: 250

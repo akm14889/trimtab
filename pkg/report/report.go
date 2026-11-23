@@ -105,15 +105,25 @@ func renderTable(rep *metrics.AuditReport) string {
 		}
 	}
 
-	// Active Tranche Drops OR Projected Drops (Report-Only)
+	// Active Tranche Drops OR Next Eligible Tranche (observation-only) OR Projected Drops (Report-Only)
 	if len(rep.ActiveDrops) > 0 {
-		fmt.Fprintf(&b, "\nTRANCHE %d DROPS (0 live consumers in %.0fd — sorted by largest series savings)\n",
-			rep.Summary.ActiveTranche, rep.WindowDays,
+		statusSuffix := ""
+		if rep.Safety.ActiveTrancheStatus != "" {
+			statusSuffix = fmt.Sprintf(" [%s]", rep.Safety.ActiveTrancheStatus)
+		}
+		fmt.Fprintf(&b, "\nTRANCHE %d DROPS%s (0 live consumers in %.0fd — sorted by largest series savings)\n",
+			rep.Summary.ActiveTranche, statusSuffix, rep.WindowDays,
 		)
 		writeDropsTable(&b, rep.ActiveDrops)
 	} else if len(rep.ProjectedDrops) > 0 {
 		fmt.Fprintf(&b, "\nPROJECTED DROPS (Report-Only — 0 synthesized until safety gate clears)\n")
 		writeDropsTable(&b, rep.ProjectedDrops)
+	} else if !rep.Safety.ReportOnly && !rep.Safety.Blocked && len(rep.Tranches) > 0 && rep.Safety.NextTrancheReady {
+		nextT := rep.Tranches[0]
+		fmt.Fprintf(&b, "\nNEXT ELIGIBLE TRANCHE (Tranche %d/%d — observation-only; run 'trimtab synth --activate' to activate)\n",
+			nextT.Number, rep.Summary.TotalTranches,
+		)
+		writeDropsTable(&b, nextT.Items)
 	}
 
 	// Capability Advisories (e.g., OTel bucket-only or skipped unverified names)
@@ -228,18 +238,29 @@ func renderTable(rep *metrics.AuditReport) string {
 		}
 	}
 
-	if !rep.Safety.ReportOnly && !rep.Safety.Blocked && rep.Summary.TotalTranches > rep.Summary.ActiveTranche {
-		nextTranche := rep.Summary.ActiveTranche + 1
-		if rep.Safety.UnresolvedRegrets > 0 {
-			fmt.Fprintf(&b, "Next tranche (%d/%d) BLOCKED until regrets are reviewed.\n", nextTranche, rep.Summary.TotalTranches)
-		} else if rep.Safety.SoakBlocked {
-			fmt.Fprintf(&b, "Next tranche (%d/%d) soaking (%s remaining with 0 regrets).\n",
-				nextTranche, rep.Summary.TotalTranches, formatDurationShort(rep.Safety.SoakRemaining),
+	if !rep.Safety.ReportOnly && !rep.Safety.Blocked {
+		if rep.Safety.PendingConfirmation {
+			fmt.Fprintf(&b, "Tranche %d/%d is awaiting confirmation (waiting for dropped series to reach 0 in inventory, or pass --confirm-tranche).\n",
+				rep.Summary.ActiveTranche, maxInt(rep.Summary.TotalTranches, rep.Summary.ActiveTranche),
 			)
-		} else {
-			fmt.Fprintf(&b, "Next tranche (%d/%d) unlocks after %s soak with 0 regrets.\n",
-				nextTranche, rep.Summary.TotalTranches, formatDurationShort(rep.SoakWindow),
+		} else if rep.Safety.NextTrancheReady && len(rep.Tranches) > 0 {
+			nextT := rep.Tranches[0]
+			fmt.Fprintf(&b, "Next eligible tranche (%d/%d) is ready (observation-only; run 'trimtab synth --activate' to activate).\n",
+				nextT.Number, maxInt(rep.Summary.TotalTranches, nextT.Number),
 			)
+		} else if rep.Summary.TotalTranches > rep.Summary.ActiveTranche {
+			nextTranche := rep.Summary.ActiveTranche + 1
+			if rep.Safety.UnresolvedRegrets > 0 {
+				fmt.Fprintf(&b, "Next tranche (%d/%d) BLOCKED until regrets are reviewed.\n", nextTranche, rep.Summary.TotalTranches)
+			} else if rep.Safety.SoakBlocked {
+				fmt.Fprintf(&b, "Next tranche (%d/%d) soaking (%s remaining with 0 regrets).\n",
+					nextTranche, rep.Summary.TotalTranches, formatDurationShort(rep.Safety.SoakRemaining),
+				)
+			} else {
+				fmt.Fprintf(&b, "Next tranche (%d/%d) unlocks after %s soak with 0 regrets.\n",
+					nextTranche, rep.Summary.TotalTranches, formatDurationShort(rep.SoakWindow),
+				)
+			}
 		}
 	}
 
@@ -297,9 +318,15 @@ func renderMarkdown(rep *metrics.AuditReport) string {
 
 	drops := rep.ActiveDrops
 	heading := fmt.Sprintf("Tranche %d Drops", rep.Summary.ActiveTranche)
+	if rep.Safety.ActiveTrancheStatus != "" && len(drops) > 0 {
+		heading = fmt.Sprintf("Tranche %d Drops (%s)", rep.Summary.ActiveTranche, rep.Safety.ActiveTrancheStatus)
+	}
 	if len(drops) == 0 && len(rep.ProjectedDrops) > 0 {
 		drops = rep.ProjectedDrops
 		heading = "Projected Drops (Report-Only)"
+	} else if len(drops) == 0 && !rep.Safety.ReportOnly && !rep.Safety.Blocked && len(rep.Tranches) > 0 && rep.Safety.NextTrancheReady {
+		drops = rep.Tranches[0].Items
+		heading = fmt.Sprintf("Next Eligible Tranche (%d/%d — Observation-Only)", rep.Tranches[0].Number, rep.Summary.TotalTranches)
 	}
 	if len(drops) > 0 {
 		fmt.Fprintf(&b, "\n## %s\n\n", heading)

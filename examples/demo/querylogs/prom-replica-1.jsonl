@@ -1,4 +1,7 @@
 {"params":{"query":"sum by (service) (rate(inventory_sync_duration_seconds_count[5m]))"},"httpRequest":{"clientIP":"10.0.10.3","method":"GET","path":"/api/v1/query_range","headers":{"User-Agent":"Grafana/11.3"}},"ts":"2026-11-15T14:00:00Z"}
+{"params":{"query":"rate(http_requests_total[5m])"},"httpRequest":{"clientIP":"10.0.10.3","method":"GET","path":"/api/v1/query_range","headers":{"User-Agent":"Grafana/11.3"}},"ts":"2026-11-16T12:00:00Z"}
+{"params":{"query":"rate(http_requests_total[5m])"},"httpRequest":{"clientIP":"10.0.10.3","method":"GET","path":"/api/v1/query_range","headers":{"User-Agent":"Grafana/11.3"}},"ts":"2026-11-17T12:00:00Z"}
 {"params":{"query":"histogram_quantile(0.99, api_native_latency_seconds)"},"httpRequest":{"clientIP":"10.0.10.3","method":"GET","path":"/api/v1/query_range","headers":{"User-Agent":"Grafana/11.3"}},"ts":"2026-11-18T11:00:00Z"}
+{"params":{"query":"rate(http_requests_total[5m])"},"httpRequest":{"clientIP":"10.0.10.3","method":"GET","path":"/api/v1/query_range","headers":{"User-Agent":"Grafana/11.3"}},"ts":"2026-11-19T12:00:00Z"}
 {"params":{"query":"sum by (le, service) (rate(orders_live_latency_seconds_bucket[5m]))"},"ruleGroup":{"file":"rules/alerts.yaml","name":"orders_live"},"ts":"2026-11-20T09:00:00Z"}
 {"params":{"query":"rate(http_requests_total[5m])"},"httpRequest":{"clientIP":"10.0.10.3","method":"GET","path":"/api/v1/query_range","headers":{"User-Agent":"Grafana/11.3"}},"ts":"2026-11-21T12:00:00Z"}

@@ -25,11 +25,12 @@
 | **Phase 1.1** | **P1.1** | OTel Collector Synthesizer + Loki Query-Log Source | `pkg/synthesizer/otel/`, `pkg/usage/querylog/loki.go` | `[x]` Completed |
 | **Phase 2** | **P2.1** | Prometheus `remote_write` Synthesizer | `pkg/synthesizer/relabel.go`, `pkg/synthesizer/promrw/` | `[x]` Completed |
 | **Phase 2** | **P2.1a** | GitHub PR CI, Release Pipeline & Toolchain Hygiene | `.github/workflows/`, `.goreleaser.yaml`, `.golangci.yml`, `go.mod`, `Dockerfile` | `[x]` Completed |
-| **Phase 2** | **P2.1b** | Safety-Critical Hardening | `pkg/state/`, `pkg/engine/`, `pkg/usage/querylog/`, `pkg/usage/promql/`, `cmd/trimtab/` | `[ ]` Next |
-| **Phase 2** | **P2.1c** | Unified Backend Auth, Live-Scale Hardening & `trimtab doctor` | `pkg/httpclient/`, `pkg/config/`, `pkg/inventory/prometheus/`, `pkg/usage/querylog/`, `pkg/usage/grafana/`, `pkg/synthesizer/alloy/`, `deploy/k8s/` | `[ ]` Planned |
-| **Phase 2** | **P2.2** | Critical Infrastructure & Ruler Usage Sources | `pkg/usage/ruler/`, `pkg/usage/k8sconsumers/` | `[ ]` Planned |
-| **Phase 2** | **P2.3** | Observability Ecosystem Static Consumers | `pkg/usage/alertmanager/`, `pkg/usage/perses/`, `pkg/usage/slo/` | `[ ]` Planned |
-| **Phase 2** | **P2.4** | Per-Team Attribution & FinOps Exporter | `pkg/attribution/`, `pkg/exporter/` | `[ ]` Planned |
+| **Phase 2** | **P2.1b** | Safety-Critical Hardening | `pkg/state/`, `pkg/engine/`, `pkg/usage/querylog/`, `pkg/usage/promql/`, `cmd/trimtab/` | `[x]` Completed |
+| **Phase 2** | **P2.1c** | Unified Backend Auth, Live-Scale Hardening & `trimtab doctor` | `pkg/httpclient/`, `pkg/config/`, `pkg/inventory/prometheus/`, `pkg/usage/querylog/`, `pkg/usage/grafana/`, `pkg/synthesizer/alloy/`, `deploy/k8s/` | `[x]` Completed |
+| **Phase 2** | **P2.1d** | Lean Helm Chart (`charts/trimtab/`) & Non-Prod Quickstart | `charts/trimtab/`, `.github/workflows/`, `README.md` | `[x]` Completed |
+| **Phase 2** | **P2.2** | Critical Infrastructure & Ruler Usage Sources | `pkg/usage/ruler/`, `pkg/usage/k8sconsumers/` | `[x]` Completed |
+| **Phase 2** | **P2.3** | Observability Ecosystem Static Consumers | `pkg/usage/alertmanager/`, `pkg/usage/perses/`, `pkg/usage/slo/` | `[x]` Completed |
+| **Phase 2** | **P2.4** | Per-Team Attribution & FinOps Exporter | `pkg/attribution/`, `pkg/exporter/` | `[ ]` Next |
 | **Phase 2** | **P2.5** | GitOps PR Actuator | `pkg/actuator/`, `pkg/actuator/gitops/` | `[ ]` Planned |
 | **Phase 2** | **P2.6** | Kubernetes Operator & CRDs | `api/v1alpha1/`, `internal/controller/`, `cmd/trimtab-operator/` | `[ ]` Planned |
 | **Phase 2** | **P2.7** | Multi-Cluster & Per-Selector Drop Scoping | `pkg/scope/`, `pkg/state/`, `pkg/engine/` | `[ ]` Planned |
@@ -48,6 +49,7 @@ flowchart LR
     P21a["P2.1a: PR CI & Release Pipeline\n(GitHub Actions, GoReleaser, GHCR)"]
     P21b["P2.1b: Safety Hardening\n(Rotation, Read-Only Analyze, Wildcards)"]
     P21c["P2.1c: Backend Auth & Live Scale\n(pkg/httpclient, Pagination, trimtab doctor)"]
+    P21d["P2.1d: Lean Helm Chart\n(CronJob, zero CRDs, helm test doctor)"]
     P22["P2.2: Ruler APIs & K8s Consumers\n(KEDA, HPA, Rollouts, Flagger)"]
     P23["P2.3: Ecosystem Consumers\n(Alertmanager, Perses, Sloth/Pyrra)"]
     P24["P2.4: Team Attribution & Budgets\n(OpenCost-style /metrics)"]
@@ -62,7 +64,10 @@ flowchart LR
     P21 --> P21a
     P21a --> P21b
     P21b --> P21c
+    P21c --> P21d
     P21c --> P22
+    P21d --> P24
+    P21d --> P26
     P22 --> P23
     P22 --> P24
     P21b --> P25
@@ -158,7 +163,7 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 ---
 
-### P2.1b — Safety-Critical Hardening *(Next Build Target)*
+### P2.1b — Safety-Critical Hardening *(Completed)*
 
 - **Goal:** Eliminate three safety-critical production bugs (usage evidence lost on log rotation, `analyze` silently activating tranches, and caller-grouped wildcard detection flagging shared dashboard servers), restore PromQL label precision on scalar binary comparisons, and prevent gradual baseline bleed-down before building new Phase 2 consumers.
 - **Scope & Exact Changes:**
@@ -192,7 +197,7 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 ---
 
-### P2.1c — Unified Backend Auth (`pkg/httpclient`), Live-Scale Hardening & `trimtab doctor` *(Planned)*
+### P2.1c — Unified Backend Auth (`pkg/httpclient`), Live-Scale Hardening & `trimtab doctor` *(Completed)*
 
 - **Goal:** Implement the lean, vendor-neutral backend connectivity and authentication architecture specified in [BACKENDS_AND_AUTH.md](BACKENDS_AND_AUTH.md), eliminate live-cluster scale/truncation gaps across Prometheus/Mimir, Loki, and Grafana APIs, add Helm/GitOps-ready Alloy output modes, and provide `trimtab doctor` pre-flight verification before expanding Phase 2 consumers.
 - **Packages & Key Types:**
@@ -224,7 +229,37 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 ---
 
-### P2.2 — Critical Infrastructure & Ruler Usage Sources *(Planned)*
+### P2.1d — Lean Helm Chart (`charts/trimtab/`) & Non-Prod Quickstart *(Completed)*
+
+- **Goal:** Ship a production-grade, zero-CRD Helm chart (`charts/trimtab/`) deploying the existing `trimtab` CLI as a read-only `CronJob`—advertised as the primary Kubernetes deployment model so anyone can install Trimtab in a single namespace with zero cluster-admin permissions, zero idle RAM, and full `values.yaml` override customization, including a fast non-prod testing override (`examples/values-nonprod.yaml`).
+- **Deliverables:**
+  1. **Helm Chart Core (`charts/trimtab/`):**
+     - `Chart.yaml` (`apiVersion: v2`, `name: trimtab`, `appVersion` matching release tags).
+     - `values.yaml` & `values.schema.json`: heavily commented defaults with JSON Schema validation at install/upgrade time, exposing:
+       - `image` (`ghcr.io/trimtab-io/trimtab`), `imagePullSecrets`, `serviceAccount` (with optional annotations for IRSA / Workload Identity).
+       - `cronjob`: `schedule` (default `"0 */6 * * *"`), `concurrencyPolicy: Forbid`, `successfulJobsHistoryLimit`, `failedJobsHistoryLimit`, `reportFormat` (`table` | `markdown` | `json`), `extraArgs`, `resources`, `nodeSelector`, `tolerations`, `affinity`.
+       - Security defaults: `runAsNonRoot: true`, `runAsUser: 65532`, `readOnlyRootFilesystem: true`, `capabilities.drop: ["ALL"]`, `seccompProfile: RuntimeDefault`.
+       - Credentials & certs: `envFrom` (for `*Env` Secrets), `extraVolumes` / `extraVolumeMounts` (for `*File` Secrets and TLS/mTLS CA/client cert Secrets).
+       - State persistence: `persistence` (`enabled: true`, `size: 1Gi`, `existingClaim`, `storageClassName`, `emptyDir` fallback for ephemeral dry-runs).
+       - Full `.Values.config` section rendered directly into `trimtab.yaml` inside a `ConfigMap` (`inventory`, `usage`, `policy`, `synthesizer`).
+     - `templates/`: `_helpers.tpl`, `serviceaccount.yaml`, `configmap.yaml`, `pvc.yaml`, `cronjob.yaml`, `tests/test-doctor.yaml` (**`helm test` hook running `trimtab doctor --config /etc/trimtab/trimtab.yaml`**), and `NOTES.txt` (exact commands for `helm test`, triggering an immediate one-shot Job via `kubectl create job --from=cronjob/...`, inspecting audit logs, and running `trimtab synth --activate`).
+  2. **Standalone Chart README & Override Examples (`charts/trimtab/README.md`, `charts/trimtab/examples/`):**
+     - `charts/trimtab/README.md`: OCI & local install instructions, read-only Secret setup, `helm test` pre-flight check, fast non-prod testing walkthrough, one-time collector insertion-point snippets (Grafana Alloy `import.file`, OTel Collector `--config`, Prometheus `remote_write`), and a complete `values.yaml` reference table.
+     - `charts/trimtab/examples/values-nonprod.yaml`: fast non-prod testing override targeting **Grafana Alloy** (`schedule: "*/15 * * * *"`, `inventory.probeFirstSeen: true`, `policy.minObservationWindow: "1d"`, `policy.soakWindow: "15m"`, clearly annotated `# NON-PROD ONLY`).
+     - `charts/trimtab/examples/values-prod.yaml`: production override (`0 */6 * * *`, `30d` window, `7d` soak).
+     - `charts/trimtab/examples/values-otel.yaml` & `charts/trimtab/examples/values-promrw.yaml`: OTel Collector and Prometheus `remote_write` override examples.
+  3. **CI, Release & Documentation:**
+     - `.github/workflows/ci.yml`: add a `helm` validation job running `helm lint charts/trimtab` and `helm template` across default `values.yaml` and all 4 `examples/values-*.yaml` overrides.
+     - `.github/workflows/release.yml`: package and push OCI Helm chart `oci://ghcr.io/<owner>/charts/trimtab` on tagged releases.
+     - Root `README.md`: promote the Lean Helm Chart (`CronJob`, zero CRDs) as the recommended Kubernetes quickstart.
+- **Verification & Exit Criteria:**
+  - Offline Go test validating `Chart.yaml`, `values.yaml`, `values.schema.json`, and parsing every `examples/values-*.yaml`'s embedded `config` block through `pkg/config.Config.Validate()` so example overrides never drift from the Go config schema.
+  - CI `helm lint` + `helm template` passing across default and all 4 example overrides.
+  - `go test -count=1 -race ./... && make verify && make lint && make demo && make demo-otel && make demo-promrw` green.
+
+---
+
+### P2.2 — Critical Infrastructure & Ruler Usage Sources *(Completed)*
 
 - **Goal:** Close the highest-severity static visibility gaps called out in `DESIGN §3.2`: Mimir/Thanos Ruler APIs and Kubernetes autoscaling/progressive-delivery consumers whose metrics must never be mistakenly flagged unused if query logs have gaps or during cold start.
 - **Packages & Key Types:**
@@ -249,7 +284,7 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 ---
 
-### P2.3 — Observability Ecosystem Static Consumers
+### P2.3 — Observability Ecosystem Static Consumers *(Completed)*
 
 - **Goal:** Protect labels needed for alert routing/templating and ingest usage from Perses dashboards and Sloth/Pyrra SLO definitions.
 - **Packages & Key Types:**
@@ -269,7 +304,7 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 ---
 
-### P2.4 — Per-Team Attribution & "OpenCost for Telemetry" FinOps Exporter
+### P2.4 — Per-Team Attribution & "OpenCost for Telemetry" FinOps Exporter *(Next Build Target)*
 
 - **Goal:** Answer *"which team owns these active/droppable series and how much do they cost?"*, evaluate per-team budgets, and expose OpenCost-compatible Prometheus metrics (`DESIGN §2, §8`).
 - **Packages & Key Types:**
@@ -284,7 +319,7 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
     - **Budget Evaluation:** Evaluates configured `Budgets` (`team`, `maxActiveSeries`, `maxMonthlyCostUSD`, `warnThresholdPercent`) -> `WithinBudget`, `Warning`, `Exceeded`.
     - **Pricing:** `costPerThousandSeriesMonthlyUSD` (default `0`: dollar metrics/columns only render when pricing > 0 so Trimtab never fabricates vendor billing rates).
   - `pkg/metrics/types.go`: add optional `Attribution *AttributionReport` field on `AuditReport` (rendered in `pkg/report` table/markdown/json when present).
-  - `pkg/exporter/`: `Server` wrapping `prometheus/client_golang` (`prometheus.NewRegistry()`, avoiding global registry pollution) exposed via `trimtab serve --config ... --listen :9190 --interval 15m` with `/metrics`, `/healthz`, `/readyz` and background scrape loop (strictly out of the data path).
+  - `pkg/exporter/`: `Server` wrapping `prometheus/client_golang` (`prometheus.NewRegistry()`, avoiding global registry pollution) exposed via `trimtab serve --config ... --listen :9190 --interval 15m` with `/metrics`, `/healthz`, `/readyz` and background scrape loop (strictly out of the data path). Also add an opt-in `mode: server` (with `Service` + `ServiceMonitor`, still zero CRDs) to `charts/trimtab/` (`P2.1d`).
     - Exported metrics:
       - `trimtab_team_active_series{team,tenant}`
       - `trimtab_team_droppable_series{team,tenant}`
@@ -354,7 +389,7 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
     - `TelemetryRecommendation`: materialized by the controller per policy (`spec.approvalMode: auto|manual`, `spec.approvedTranche`, `spec.breakGlassUntil`, `spec.acknowledgedBaselineShift`); `status` mirrors `ActiveDrops`, `ProjectedDrops`, `DeadRecordingRules`, `LabelCollapseAdvisories`, `Regrets`, and synthesized ConfigMap/Secret reference.
   - `internal/controller/`: `controller-runtime` reconcilers for all 3 CRDs + ConfigMap/PVC `StateLedger` backend (`pkg/state` `Store` interface implemented for file, ConfigMap, and in-memory).
   - `cmd/trimtab-operator/`: separate operator binary entrypoint so `cmd/trimtab` CLI stays fast and dependency-light for non-K8s users; includes `/metrics` (merged with `pkg/exporter`), `/healthz`, `/readyz`, and leader election.
-  - `deploy/operator/`: generated CRD YAML (`controller-gen`), RBAC (`ClusterRole` read-only on `ScaledObject`/`PrometheusRule`/`AnalysisTemplate`/`Canary` + read/write on Trimtab CRDs and output ConfigMaps), and `Deployment`. Extend `.github/workflows/release.yml` and `.goreleaser.yaml` from `P2.1a` to publish the `trimtab-operator` multi-arch container image and CRD/Helm release bundle alongside the CLI.
+  - `deploy/operator/`: generated CRD YAML (`controller-gen`), RBAC (`ClusterRole` read-only on `ScaledObject`/`PrometheusRule`/`AnalysisTemplate`/`Canary` + read/write on Trimtab CRDs and output ConfigMaps), and `Deployment`. Extend `.github/workflows/release.yml`, `.goreleaser.yaml`, and `charts/trimtab/` (`P2.1d`) with an optional `mode: operator` profile publishing the `trimtab-operator` multi-arch container image and CRDs alongside the lean CronJob default.
   - `Tiltfile` & `scripts/local-k8s.sh`: add optional operator dev deployment profile in Kind.
 - **Safety Guarantees:**
   - **`breakGlassUntil`:** When `now < recommendation.Spec.BreakGlassUntil`, the controller immediately sets `ReportOnly`/override mode and writes a zero-drop pass-through/no-op artifact to the output ConfigMap (and triggers Regret/PR if GitOps enabled), **without** permanently polluting `neverDrop`; once `BreakGlassUntil` expires, normal state resumes.

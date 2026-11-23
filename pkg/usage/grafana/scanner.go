@@ -4,16 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"trimtab.io/trimtab/pkg/config"
+	"trimtab.io/trimtab/pkg/httpclient"
 	"trimtab.io/trimtab/pkg/metrics"
 	"trimtab.io/trimtab/pkg/usage/promql"
 	"trimtab.io/trimtab/pkg/usage/promrules"
@@ -146,75 +146,100 @@ func scanAlertRulesPath(path string, res *ScanResult) error {
 	return nil
 }
 
+var (
+	searchPageSize = 1000
+	maxSearchPages = 200
+)
+
 func scanHTTP(ctx context.Context, cfg *config.GrafanaConfig, res *ScanResult) error {
 	timeout := cfg.Timeout.Duration()
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	client := &http.Client{Timeout: timeout}
-	baseURL := strings.TrimRight(cfg.URL, "/")
-
-	doGet := func(endpoint string) ([]byte, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+endpoint, nil)
-		if err != nil {
-			return nil, err
-		}
-		if cfg.APIKey != "" {
-			req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-		}
-		for k, v := range cfg.Headers {
-			req.Header.Set(k, v)
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("grafana GET %s: %w", endpoint, err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("grafana read %s: %w", endpoint, err)
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("grafana GET %s returned HTTP %d: %s", endpoint, resp.StatusCode, strings.TrimSpace(string(body)))
-		}
-		return body, nil
-	}
-
-	// 1. Search all dashboards
-	searchBody, err := doGet("/api/search?type=dash-db&limit=5000")
+	auth, err := cfg.EffectiveAuth()
 	if err != nil {
 		return err
 	}
-	var searchItems []struct {
+	client, err := httpclient.New(httpclient.Options{
+		BaseURL:     cfg.URL,
+		Timeout:     timeout,
+		TenantID:    cfg.TenantID,
+		Headers:     cfg.Headers,
+		HeadersEnv:  cfg.HeadersEnv,
+		HeadersFile: cfg.HeadersFile,
+		Auth:        auth,
+	})
+	if err != nil {
+		return fmt.Errorf("grafana client: %w", err)
+	}
+	res.Warnings = append(res.Warnings, client.Warnings()...)
+
+	// 1. Paginated search for all dashboards
+	seenUIDs := make(map[string]struct{})
+	type searchItem struct {
 		UID         string   `json:"uid"`
 		Title       string   `json:"title"`
 		FolderTitle string   `json:"folderTitle"`
 		Tags        []string `json:"tags"`
 	}
-	if err := json.Unmarshal(searchBody, &searchItems); err != nil {
-		return fmt.Errorf("decode grafana /api/search: %w", err)
+	var allItems []searchItem
+	pageSize := searchPageSize
+	if pageSize <= 0 {
+		pageSize = 1000
 	}
-	for _, item := range searchItems {
-		if item.UID == "" {
-			continue
-		}
-		dashBody, err := doGet("/api/dashboards/uid/" + item.UID)
+	for page := 1; page <= maxSearchPages; page++ {
+		endpoint := "/api/search?type=dash-db&limit=" + strconv.Itoa(pageSize) + "&page=" + strconv.Itoa(page)
+		searchBody, err := client.Get(ctx, endpoint)
 		if err != nil {
-			return err
+			return fmt.Errorf("grafana %w", err)
+		}
+		var pageItems []searchItem
+		if err := json.Unmarshal(searchBody, &pageItems); err != nil {
+			return fmt.Errorf("decode grafana /api/search (page %d): %w", page, err)
+		}
+		for _, item := range pageItems {
+			if item.UID == "" {
+				continue
+			}
+			if _, dup := seenUIDs[item.UID]; dup {
+				continue
+			}
+			seenUIDs[item.UID] = struct{}{}
+			allItems = append(allItems, item)
+		}
+		if len(pageItems) < pageSize {
+			break
+		}
+	}
+
+	for _, item := range allItems {
+		dashBody, err := client.Get(ctx, "/api/dashboards/uid/"+item.UID)
+		if err != nil {
+			return fmt.Errorf("grafana %w", err)
 		}
 		if err := parseDashboardJSON(dashBody, item.FolderTitle, res); err != nil {
 			return fmt.Errorf("parse dashboard uid=%s: %w", item.UID, err)
 		}
 	}
 
-	// 2. Grafana-managed alert rules
+	// 2. Grafana-managed alert rules (provisioning API or Grafana ruler API)
 	if cfg.ManagedAlertsEnabled() {
-		alertBody, err := doGet("/api/v1/provisioning/alert-rules")
-		if err != nil {
-			return err
-		}
-		if err := parseManagedAlertsJSON(alertBody, res); err != nil {
-			return fmt.Errorf("parse grafana managed alerts: %w", err)
+		if strings.EqualFold(cfg.AlertAPI, "ruler") {
+			alertBody, err := client.Get(ctx, "/api/ruler/grafana/api/v1/rules")
+			if err != nil {
+				return fmt.Errorf("grafana %w", err)
+			}
+			if err := parseGrafanaRulerAlertsJSON(alertBody, res); err != nil {
+				return fmt.Errorf("parse grafana ruler alerts: %w", err)
+			}
+		} else {
+			alertBody, err := client.Get(ctx, "/api/v1/provisioning/alert-rules")
+			if err != nil {
+				return fmt.Errorf("grafana %w", err)
+			}
+			if err := parseManagedAlertsJSON(alertBody, res); err != nil {
+				return fmt.Errorf("parse grafana managed alerts: %w", err)
+			}
 		}
 	}
 
@@ -255,15 +280,17 @@ type row struct {
 }
 
 type panel struct {
-	Title           string            `json:"title"`
-	Targets         []target          `json:"targets"`
-	Panels          []panel           `json:"panels"`
-	Links           []linkObj         `json:"links"`
-	FieldConfig     fieldConfig       `json:"fieldConfig"`
-	Transformations []transformation  `json:"transformations"`
+	Title           string           `json:"title"`
+	Datasource      any              `json:"datasource"`
+	Targets         []target         `json:"targets"`
+	Panels          []panel          `json:"panels"`
+	Links           []linkObj        `json:"links"`
+	FieldConfig     fieldConfig      `json:"fieldConfig"`
+	Transformations []transformation `json:"transformations"`
 }
 
 type target struct {
+	Datasource   any    `json:"datasource"`
 	Expr         string `json:"expr"`
 	LegendFormat string `json:"legendFormat"`
 }
@@ -295,9 +322,50 @@ type transformation struct {
 }
 
 type templateVar struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Query any    `json:"query"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Datasource any    `json:"datasource"`
+	Query      any    `json:"query"`
+}
+
+func isNonPrometheusDatasource(ds any) bool {
+	if ds == nil {
+		return false
+	}
+	checkType := func(s string) bool {
+		t := strings.ToLower(strings.TrimSpace(s))
+		if t == "" || t == "prometheus" || t == "-- mixed --" || t == "grafana-prometheus-datasource" {
+			return false
+		}
+		if strings.HasPrefix(t, "$") {
+			return false
+		}
+		switch t {
+		case "loki", "tempo", "jaeger", "zipkin", "elasticsearch", "opensearch",
+			"postgres", "mysql", "mssql", "cloudwatch", "stackdriver",
+			"influxdb", "graphite", "testdata", "grafana", "__expr__", "alertmanager",
+			"azure-monitor-datasource", "grafana-testdata-datasource", "grafana-pyroscope-datasource":
+			return true
+		}
+		if strings.Contains(t, "loki") || strings.Contains(t, "tempo") || strings.Contains(t, "jaeger") ||
+			strings.Contains(t, "elastic") || strings.Contains(t, "influx") || strings.Contains(t, "pyroscope") {
+			return true
+		}
+		return false
+	}
+
+	switch v := ds.(type) {
+	case string:
+		return checkType(v)
+	case map[string]any:
+		if t, ok := v["type"].(string); ok && t != "" {
+			return checkType(t)
+		}
+		if uid, ok := v["uid"].(string); ok && uid == "__expr__" {
+			return true
+		}
+	}
+	return false
 }
 
 func parseDashboardJSON(data []byte, folderHint string, res *ScanResult) error {
@@ -359,6 +427,13 @@ func parseDashboardJSON(data []byte, folderHint string, res *ScanResult) error {
 		panelExtraLabels := extractPanelExtraLabels(p)
 		for _, tgt := range p.Targets {
 			if strings.TrimSpace(tgt.Expr) == "" {
+				continue
+			}
+			ds := tgt.Datasource
+			if ds == nil {
+				ds = p.Datasource
+			}
+			if isNonPrometheusDatasource(ds) {
 				continue
 			}
 			legendLabels := extractLegendLabels(tgt.LegendFormat)
@@ -507,6 +582,9 @@ func isValidLabelIdent(s string) bool {
 }
 
 func extractTemplateVarRefs(tv templateVar, sourceID, dashTitle, folder string, tags []string, res *ScanResult) {
+	if isNonPrometheusDatasource(tv.Datasource) {
+		return
+	}
 	queryStr := ""
 	switch q := tv.Query.(type) {
 	case string:
@@ -583,19 +661,23 @@ func extractTemplateVarRefs(tv templateVar, sourceID, dashTitle, folder string, 
 	}
 }
 
+type managedAlertDataItem struct {
+	RefID         string `json:"refId"`
+	DatasourceUID string `json:"datasourceUid"`
+	Model         struct {
+		Datasource any    `json:"datasource"`
+		Expr       string `json:"expr"`
+	} `json:"model"`
+}
+
 type managedAlertRule struct {
-	UID         string            `json:"uid"`
-	Title       string            `json:"title"`
-	RuleGroup   string            `json:"ruleGroup"`
-	FolderUID   string            `json:"folderUID"`
-	Annotations map[string]string `json:"annotations"`
-	Labels      map[string]string `json:"labels"`
-	Data        []struct {
-		RefID string `json:"refId"`
-		Model struct {
-			Expr string `json:"expr"`
-		} `json:"model"`
-	} `json:"data"`
+	UID         string                 `json:"uid"`
+	Title       string                 `json:"title"`
+	RuleGroup   string                 `json:"ruleGroup"`
+	FolderUID   string                 `json:"folderUID"`
+	Annotations map[string]string      `json:"annotations"`
+	Labels      map[string]string      `json:"labels"`
+	Data        []managedAlertDataItem `json:"data"`
 }
 
 func parseManagedAlertsJSON(data []byte, res *ScanResult) error {
@@ -604,47 +686,107 @@ func parseManagedAlertsJSON(data []byte, res *ScanResult) error {
 		return err
 	}
 	for _, r := range rules {
-		res.AlertRuleCount++
-		var tplTexts []string
-		for _, v := range r.Annotations {
-			tplTexts = append(tplTexts, v)
-		}
-		for _, v := range r.Labels {
-			tplTexts = append(tplTexts, v)
-		}
-		tplLabels := promrules.ExtractTemplateLabels(tplTexts...)
-		sourceID := "grafana-alert:" + r.UID
-		if r.UID == "" {
-			sourceID = "grafana-alert:" + r.Title
-		}
-		for _, d := range r.Data {
-			expr := strings.TrimSpace(d.Model.Expr)
-			if expr == "" {
-				continue
-			}
-			extracted, err := promql.Extract(SanitizePromQL(expr))
-			if err != nil {
-				res.Warnings = append(res.Warnings, fmt.Sprintf("grafana alert %q: failed to parse expr: %v", r.Title, err))
-				continue
-			}
-			for _, acc := range extracted.Accesses {
-				res.Refs = append(res.Refs, metrics.UsageRef{
-					MetricName:     acc.MetricName,
-					MetricRegex:    acc.MetricRegex,
-					IsRegex:        acc.IsRegex,
-					Origin:         metrics.OriginGrafanaAlert,
-					SourceID:       sourceID,
-					SourceName:     r.Title,
-					SourceFolder:   r.FolderUID,
-					Query:          expr,
-					ExplicitLabels: mergeStrings(acc.ExplicitLabels, tplLabels),
-					PreservesAll:   acc.PreservesAll,
-					WithoutLabels:  acc.WithoutLabels,
-				})
+		recordManagedAlertRule(r, res)
+	}
+	return nil
+}
+
+func parseGrafanaRulerAlertsJSON(data []byte, res *ScanResult) error {
+	var byFolder map[string][]struct {
+		Name  string `json:"name"`
+		Rules []struct {
+			Annotations  map[string]string `json:"annotations"`
+			Labels       map[string]string `json:"labels"`
+			GrafanaAlert *struct {
+				UID       string                 `json:"uid"`
+				Title     string                 `json:"title"`
+				RuleGroup string                 `json:"ruleGroup"`
+				FolderUID string                 `json:"namespace_uid"`
+				Data      []managedAlertDataItem `json:"data"`
+			} `json:"grafana_alert"`
+		} `json:"rules"`
+	}
+	if err := json.Unmarshal(data, &byFolder); err != nil {
+		return err
+	}
+	folders := make([]string, 0, len(byFolder))
+	for f := range byFolder {
+		folders = append(folders, f)
+	}
+	sort.Strings(folders)
+	for _, folder := range folders {
+		for _, grp := range byFolder[folder] {
+			for _, rule := range grp.Rules {
+				if rule.GrafanaAlert == nil {
+					continue
+				}
+				ga := rule.GrafanaAlert
+				folderUID := ga.FolderUID
+				if folderUID == "" {
+					folderUID = folder
+				}
+				groupName := ga.RuleGroup
+				if groupName == "" {
+					groupName = grp.Name
+				}
+				recordManagedAlertRule(managedAlertRule{
+					UID:         ga.UID,
+					Title:       ga.Title,
+					RuleGroup:   groupName,
+					FolderUID:   folderUID,
+					Annotations: rule.Annotations,
+					Labels:      rule.Labels,
+					Data:        ga.Data,
+				}, res)
 			}
 		}
 	}
 	return nil
+}
+
+func recordManagedAlertRule(r managedAlertRule, res *ScanResult) {
+	res.AlertRuleCount++
+	var tplTexts []string
+	for _, v := range r.Annotations {
+		tplTexts = append(tplTexts, v)
+	}
+	for _, v := range r.Labels {
+		tplTexts = append(tplTexts, v)
+	}
+	tplLabels := promrules.ExtractTemplateLabels(tplTexts...)
+	sourceID := "grafana-alert:" + r.UID
+	if r.UID == "" {
+		sourceID = "grafana-alert:" + r.Title
+	}
+	for _, d := range r.Data {
+		if d.DatasourceUID == "__expr__" || isNonPrometheusDatasource(d.Model.Datasource) {
+			continue
+		}
+		expr := strings.TrimSpace(d.Model.Expr)
+		if expr == "" {
+			continue
+		}
+		extracted, err := promql.Extract(SanitizePromQL(expr))
+		if err != nil {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("grafana alert %q: failed to parse expr: %v", r.Title, err))
+			continue
+		}
+		for _, acc := range extracted.Accesses {
+			res.Refs = append(res.Refs, metrics.UsageRef{
+				MetricName:     acc.MetricName,
+				MetricRegex:    acc.MetricRegex,
+				IsRegex:        acc.IsRegex,
+				Origin:         metrics.OriginGrafanaAlert,
+				SourceID:       sourceID,
+				SourceName:     r.Title,
+				SourceFolder:   r.FolderUID,
+				Query:          expr,
+				ExplicitLabels: mergeStrings(acc.ExplicitLabels, tplLabels),
+				PreservesAll:   acc.PreservesAll,
+				WithoutLabels:  acc.WithoutLabels,
+			})
+		}
+	}
 }
 
 func mergeStrings(a, b []string) []string {

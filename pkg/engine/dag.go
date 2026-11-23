@@ -86,11 +86,11 @@ func ResolveRecordingRuleDAG(cat *FamilyCatalog, usage *metrics.UsageIndex, rule
 		return deps
 	}
 
-	// Seed BFS queue with every node that has direct live usage (sinks).
+	// Seed BFS queue with every node that has direct live usage (sinks or ledger-retained recent queries).
 	liveNodes := make(map[string]bool)
 	queue := make([]string, 0)
 	for famName, fu := range usage.Families {
-		if fu.HasDirectLiveUsage() {
+		if fu.HasDirectLiveUsage() || fu.LiveFromLedger {
 			if !liveNodes[famName] {
 				liveNodes[famName] = true
 				queue = append(queue, famName)
@@ -99,7 +99,7 @@ func ResolveRecordingRuleDAG(cat *FamilyCatalog, usage *metrics.UsageIndex, rule
 	}
 	// Also seed any recorded rule name directly referenced by live usage even if not in inventory.
 	for recName := range rulesByName {
-		if fu, ok := usage.Families[recName]; ok && fu.HasDirectLiveUsage() {
+		if fu, ok := usage.Families[recName]; ok && (fu.HasDirectLiveUsage() || fu.LiveFromLedger) {
 			if !liveNodes[recName] {
 				liveNodes[recName] = true
 				queue = append(queue, recName)

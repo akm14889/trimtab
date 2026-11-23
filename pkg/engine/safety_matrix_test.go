@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,10 +11,15 @@ import (
 	"trimtab.io/trimtab/pkg/inventory/prometheus"
 	"trimtab.io/trimtab/pkg/metrics"
 	"trimtab.io/trimtab/pkg/state"
+	"trimtab.io/trimtab/pkg/usage/alertmanager"
 	"trimtab.io/trimtab/pkg/usage/grafana"
+	"trimtab.io/trimtab/pkg/usage/k8sconsumers"
+	"trimtab.io/trimtab/pkg/usage/perses"
 	"trimtab.io/trimtab/pkg/usage/promql"
 	"trimtab.io/trimtab/pkg/usage/promrules"
 	"trimtab.io/trimtab/pkg/usage/querylog"
+	"trimtab.io/trimtab/pkg/usage/ruler"
+	"trimtab.io/trimtab/pkg/usage/slo"
 )
 
 func alloyCaps() metrics.Capabilities {
@@ -36,10 +42,16 @@ func otelCaps() metrics.Capabilities {
 }
 
 func fullCoverageQueryLog(now time.Time, entries ...querylog.QueryLogEntry) *querylog.Result {
+	observed := make(map[string]int, 30)
+	for i := 0; i < 30; i++ {
+		d := now.Add(-time.Duration(i) * 24 * time.Hour).UTC().Format("2006-01-02")
+		observed[d] = 1
+	}
 	res := &querylog.Result{
 		Configured:        true,
 		EarliestTimestamp: now.Add(-31 * 24 * time.Hour),
 		LatestTimestamp:   now,
+		ObservedDates:     observed,
 	}
 	for _, e := range entries {
 		if len(e.Accesses) == 0 && e.Query != "" {
@@ -49,6 +61,9 @@ func fullCoverageQueryLog(now time.Time, entries ...querylog.QueryLogEntry) *que
 		}
 		res.Entries = append(res.Entries, e)
 		res.TotalEntries++
+		if !e.Timestamp.IsZero() {
+			res.ObservedDates[e.Timestamp.UTC().Format("2006-01-02")]++
+		}
 		switch e.Origin {
 		case metrics.OriginAPIUser:
 			res.APIUserCount++
@@ -66,11 +81,13 @@ func fullCoverageQueryLog(now time.Time, entries ...querylog.QueryLogEntry) *que
 					Origin:         e.Origin,
 					SourceID:       "querylog:" + string(e.Origin),
 					SourceName:     "querylog",
+					DashboardUID:   e.DashboardUID,
 					Query:          e.Query,
 					Timestamp:      e.Timestamp,
 					ExplicitLabels: acc.ExplicitLabels,
 					PreservesAll:   acc.PreservesAll,
 					WithoutLabels:  acc.WithoutLabels,
+					ClientCaller:   e.ClientCaller,
 				})
 			}
 		}
@@ -187,13 +204,14 @@ func TestSafetyMatrix_02_RuleEvalDoesNotMarkLive(t *testing.T) {
 	}
 
 	rep, err := Analyze(context.Background(), AnalyzeInput{
-		Config:       cfg,
-		Ledger:       state.NewLedger(),
-		Inventory:    inv,
-		QueryLog:     ql,
-		PromRules:    promAlerts,
-		Capabilities: alloyCaps(),
-		Now:          now,
+		Config:              cfg,
+		Ledger:              state.NewLedger(),
+		Inventory:           inv,
+		QueryLog:            ql,
+		PromRules:           promAlerts,
+		Capabilities:        alloyCaps(),
+		Now:                 now,
+		ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -242,12 +260,13 @@ func TestSafetyMatrix_03_TranchesAndSanityCeiling(t *testing.T) {
 		}
 		ql := fullCoverageQueryLog(now, querylog.QueryLogEntry{Query: "live_core", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser})
 		rep, err := Analyze(context.Background(), AnalyzeInput{
-			Config:       cfg,
-			Ledger:       state.NewLedger(),
-			Inventory:    inv,
-			QueryLog:     ql,
-			Capabilities: alloyCaps(),
-			Now:          now,
+			Config:              cfg,
+			Ledger:              state.NewLedger(),
+			Inventory:           inv,
+			QueryLog:            ql,
+			Capabilities:        alloyCaps(),
+			Now:                 now,
+			ActivateNextTranche: true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -282,12 +301,13 @@ func TestSafetyMatrix_03_TranchesAndSanityCeiling(t *testing.T) {
 		}
 		ql := fullCoverageQueryLog(now, querylog.QueryLogEntry{Query: "live_tiny", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser})
 		rep, err := Analyze(context.Background(), AnalyzeInput{
-			Config:       cfg,
-			Ledger:       state.NewLedger(),
-			Inventory:    inv,
-			QueryLog:     ql,
-			Capabilities: alloyCaps(),
-			Now:          now,
+			Config:              cfg,
+			Ledger:              state.NewLedger(),
+			Inventory:           inv,
+			QueryLog:            ql,
+			Capabilities:        alloyCaps(),
+			Now:                 now,
+			ActivateNextTranche: true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -322,13 +342,14 @@ func TestSafetyMatrix_04_BaselineDriftGuard(t *testing.T) {
 	partialGrafana := &grafana.ScanResult{DashboardCount: 20}
 
 	rep, err := Analyze(context.Background(), AnalyzeInput{
-		Config:       cfg,
-		Ledger:       ledger,
-		Inventory:    inv,
-		QueryLog:     ql,
-		Grafana:      partialGrafana,
-		Capabilities: alloyCaps(),
-		Now:          now,
+		Config:              cfg,
+		Ledger:              ledger,
+		Inventory:           inv,
+		QueryLog:            ql,
+		Grafana:             partialGrafana,
+		Capabilities:        alloyCaps(),
+		Now:                 now,
+		ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -354,6 +375,7 @@ func TestSafetyMatrix_04_BaselineDriftGuard(t *testing.T) {
 		Capabilities:        alloyCaps(),
 		Now:                 now,
 		AcceptBaselineShift: true,
+		ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -385,12 +407,13 @@ func TestSafetyMatrix_05_ObservationWindowProtection(t *testing.T) {
 	ql := fullCoverageQueryLog(now, querylog.QueryLogEntry{Query: "live_m", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser})
 
 	rep, err := Analyze(context.Background(), AnalyzeInput{
-		Config:       cfg,
-		Ledger:       state.NewLedger(),
-		Inventory:    inv,
-		QueryLog:     ql,
-		Capabilities: alloyCaps(),
-		Now:          now,
+		Config:              cfg,
+		Ledger:              state.NewLedger(),
+		Inventory:           inv,
+		QueryLog:            ql,
+		Capabilities:        alloyCaps(),
+		Now:                 now,
+		ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -428,12 +451,13 @@ func TestSafetyMatrix_06_DefaultNeverDropProtected(t *testing.T) {
 	ql := fullCoverageQueryLog(now, querylog.QueryLogEntry{Query: "live_m", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser})
 
 	rep, err := Analyze(context.Background(), AnalyzeInput{
-		Config:       cfg,
-		Ledger:       state.NewLedger(),
-		Inventory:    inv,
-		QueryLog:     ql,
-		Capabilities: alloyCaps(),
-		Now:          now,
+		Config:              cfg,
+		Ledger:              state.NewLedger(),
+		Inventory:           inv,
+		QueryLog:            ql,
+		Capabilities:        alloyCaps(),
+		Now:                 now,
+		ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -497,13 +521,14 @@ func TestSafetyMatrix_07_RecordingRuleDAGDeadAndLiveChains(t *testing.T) {
 	)
 
 	rep, err := Analyze(context.Background(), AnalyzeInput{
-		Config:       cfg,
-		Ledger:       state.NewLedger(),
-		Inventory:    inv,
-		QueryLog:     ql,
-		PromRules:    rules,
-		Capabilities: alloyCaps(),
-		Now:          now,
+		Config:              cfg,
+		Ledger:              state.NewLedger(),
+		Inventory:           inv,
+		QueryLog:            ql,
+		PromRules:           rules,
+		Capabilities:        alloyCaps(),
+		Now:                 now,
+		ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -673,7 +698,7 @@ func TestSafetyMatrix_10_RegretDetectionAndTrancheBlocking(t *testing.T) {
 
 	// Ledger already has Tranche 1 active from 10 days ago (soakWindow 7d WOULD have completed if 0 regrets!)
 	ledger := state.NewLedger()
-	ledger.RecordTrancheActivation(1, now.Add(-10*24*time.Hour), 7*24*time.Hour, []metrics.Recommendation{
+	ledger.RecordTrancheActivation(1, now.Add(-10*24*time.Hour), 7*24*time.Hour, true, []metrics.Recommendation{
 		{FamilyName: "dropped_a", Action: metrics.ActionDropFamily, Series: 1000},
 		{FamilyName: "dropped_b", Action: metrics.ActionDropFamily, Series: 1000},
 	})
@@ -693,12 +718,13 @@ func TestSafetyMatrix_10_RegretDetectionAndTrancheBlocking(t *testing.T) {
 	)
 
 	rep, err := Analyze(context.Background(), AnalyzeInput{
-		Config:       cfg,
-		Ledger:       ledger,
-		Inventory:    inv,
-		QueryLog:     ql,
-		Capabilities: alloyCaps(),
-		Now:          now,
+		Config:              cfg,
+		Ledger:              ledger,
+		Inventory:           inv,
+		QueryLog:            ql,
+		Capabilities:        alloyCaps(),
+		Now:                 now,
+		ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -764,7 +790,7 @@ func TestCapabilityNegotiationAndNativeHistogram(t *testing.T) {
 	// Alloy supports CanDropHistogramBucketsOnly
 	repAlloy, err := Analyze(context.Background(), AnalyzeInput{
 		Config: cfg, Ledger: state.NewLedger(), Inventory: inv, QueryLog: ql,
-		Capabilities: alloyCaps(), TargetName: "alloy", Now: now,
+		Capabilities: alloyCaps(), TargetName: "alloy", Now: now, ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -776,7 +802,7 @@ func TestCapabilityNegotiationAndNativeHistogram(t *testing.T) {
 	// OTel does NOT support CanDropHistogramBucketsOnly -> advisory only!
 	repOTel, err := Analyze(context.Background(), AnalyzeInput{
 		Config: cfg, Ledger: state.NewLedger(), Inventory: inv, QueryLog: ql,
-		Capabilities: otelCaps(), TargetName: "otel", Now: now,
+		Capabilities: otelCaps(), TargetName: "otel", Now: now, ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -837,12 +863,13 @@ func TestWildcardProtectorAndSoakProgression(t *testing.T) {
 	// Run 3 after 7d soak unlocks Tranche 2 (dead_2)!
 	cfgEx := config.DefaultConfig()
 	cfgEx.Inventory.FixturePath = "fixture.json"
+	cfgEx.Policy.SoakStartMode = "immediate"
 	cfgEx.Policy.ExcludeSources = []config.ExcludeSource{{Type: "dashboard_title", Value: "Cardinality Explorer"}}
 	ledger := state.NewLedger()
 
 	repRun1, err := Analyze(context.Background(), AnalyzeInput{
 		Config: cfgEx, Ledger: ledger, Inventory: inv, QueryLog: ql, Grafana: wildcardGraf,
-		Capabilities: alloyCaps(), Now: now,
+		Capabilities: alloyCaps(), Now: now, ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -856,7 +883,7 @@ func TestWildcardProtectorAndSoakProgression(t *testing.T) {
 	ql2 := fullCoverageQueryLog(day2, querylog.QueryLogEntry{Query: "live_a", Timestamp: day2.Add(-time.Hour), Origin: metrics.OriginAPIUser})
 	repRun2, err := Analyze(context.Background(), AnalyzeInput{
 		Config: cfgEx, Ledger: ledger, Inventory: inv, QueryLog: ql2, Grafana: wildcardGraf,
-		Capabilities: alloyCaps(), Now: day2,
+		Capabilities: alloyCaps(), Now: day2, ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -870,7 +897,7 @@ func TestWildcardProtectorAndSoakProgression(t *testing.T) {
 	ql3 := fullCoverageQueryLog(day8, querylog.QueryLogEntry{Query: "live_a", Timestamp: day8.Add(-time.Hour), Origin: metrics.OriginAPIUser})
 	repRun3, err := Analyze(context.Background(), AnalyzeInput{
 		Config: cfgEx, Ledger: ledger, Inventory: inv, QueryLog: ql3, Grafana: wildcardGraf,
-		Capabilities: alloyCaps(), Now: day8,
+		Capabilities: alloyCaps(), Now: day8, ActivateNextTranche: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -879,4 +906,926 @@ func TestWildcardProtectorAndSoakProgression(t *testing.T) {
 		t.Fatalf("Run 3 after soak should unlock Tranche 2 (2 active drops), got soakBlocked=%v drops=%d tranche=%d",
 			repRun3.Safety.SoakBlocked, len(repRun3.ActiveDrops), repRun3.Summary.ActiveTranche)
 	}
+}
+
+// Mandatory Safety Test #11 (P2.1b):
+// Log-rotation survival via ledger LastQueriedAt & LastBucketQueriedAt + trailing CoveredDates bitmap.
+func TestSafetyMatrix_11_LogRotationSurvivalAndTrailingBitmap(t *testing.T) {
+	day10 := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	day30 := day10.Add(20 * 24 * time.Hour)
+	day45 := day10.Add(35 * 24 * time.Hour)
+	old := day10.Add(-45 * 24 * time.Hour)
+
+	cfg := config.DefaultConfig()
+	cfg.Inventory.FixturePath = "fixture.json"
+
+	inv := &prometheus.InventorySnapshot{
+		MetricNames: []string{
+			"live_core",
+			"rotated_family",
+			"rotated_hist_bucket", "rotated_hist_sum", "rotated_hist_count",
+			"truly_dead_family",
+		},
+		Metadata: map[string]prometheus.MetricMetadata{
+			"rotated_hist": {Type: "histogram"},
+		},
+		SeriesCounts: map[string]int{
+			"live_core":           80000,
+			"rotated_family":      5000,
+			"rotated_hist_bucket": 4000,
+			"rotated_hist_sum":    500,
+			"rotated_hist_count":  500,
+			"truly_dead_family":   1000,
+		},
+		FirstSeenHints: map[string]time.Time{
+			"live_core": old, "rotated_family": old, "rotated_hist": old, "truly_dead_family": old,
+		},
+	}
+
+	ledger := state.NewLedger()
+
+	// Day 10: rotated_family and rotated_hist_bucket are queried in current query logs.
+	qlDay10 := fullCoverageQueryLog(day10,
+		querylog.QueryLogEntry{Query: "live_core", Timestamp: day10.Add(-time.Hour), Origin: metrics.OriginAPIUser},
+		querylog.QueryLogEntry{Query: "rate(rotated_family[5m])", Timestamp: day10.Add(-time.Hour), Origin: metrics.OriginAPIUser},
+		querylog.QueryLogEntry{Query: "rate(rotated_hist_bucket[5m])", Timestamp: day10.Add(-time.Hour), Origin: metrics.OriginAPIUser},
+	)
+	if _, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: inv, QueryLog: qlDay10,
+		Capabilities: alloyCaps(), Now: day10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Day 30 (20 days later): query logs rotated! Only live_core and rotated_hist_count appear in current logs.
+	// Ledger timestamps must keep rotated_family AND rotated_hist_bucket protected.
+	qlDay30 := fullCoverageQueryLog(day30,
+		querylog.QueryLogEntry{Query: "live_core", Timestamp: day30.Add(-time.Hour), Origin: metrics.OriginAPIUser},
+		querylog.QueryLogEntry{Query: "rate(rotated_hist_count[5m])", Timestamp: day30.Add(-time.Hour), Origin: metrics.OriginAPIUser},
+	)
+	rep30, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: inv, QueryLog: qlDay30,
+		Capabilities: alloyCaps(), Now: day30, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range rep30.ActiveDrops {
+		if d.FamilyName == "rotated_family" || d.FamilyName == "rotated_hist" {
+			t.Fatalf("rotated-off usage should stay protected within 30d window, got drop %+v", d)
+		}
+	}
+	if len(rep30.ActiveDrops) != 1 || rep30.ActiveDrops[0].FamilyName != "truly_dead_family" {
+		t.Fatalf("expected only truly_dead_family dropped at Day 30, got %+v", rep30.ActiveDrops)
+	}
+
+	// Day 45 (35 days after Day 10 query): rotated_family expires past 30d window and becomes eligible.
+	ledgerExpire := state.NewLedger()
+	ledgerExpire.RecordSeenFamily("rotated_family", old, day45)
+	ledgerExpire.RecordLastQueried("rotated_family", day10) // 35d ago (> 30d window)
+	qlDay45 := fullCoverageQueryLog(day45,
+		querylog.QueryLogEntry{Query: "live_core", Timestamp: day45.Add(-time.Hour), Origin: metrics.OriginAPIUser},
+	)
+	rep45, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledgerExpire, Inventory: inv, QueryLog: qlDay45,
+		Capabilities: alloyCaps(), Now: day45, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundRotated := false
+	for _, d := range rep45.ActiveDrops {
+		if d.FamilyName == "rotated_family" {
+			foundRotated = true
+		}
+	}
+	if !foundRotated {
+		t.Fatalf("expected rotated_family to expire after 35d (> 30d window) and become droppable, got %+v", rep45.ActiveDrops)
+	}
+
+	// Trailing-window gap test: 5 early days + 5 recent days across 30d span = 10 covered days => Report-Only!
+	gapDates := make(map[string]int)
+	for i := 0; i < 5; i++ {
+		gapDates[day30.Add(-time.Duration(29-i)*24*time.Hour).Format("2006-01-02")] = 3
+		gapDates[day30.Add(-time.Duration(i)*24*time.Hour).Format("2006-01-02")] = 3
+	}
+	gappedQL := &querylog.Result{
+		Configured:        true,
+		EarliestTimestamp: day30.Add(-29 * 24 * time.Hour),
+		LatestTimestamp:   day30,
+		ObservedDates:     gapDates,
+		TotalEntries:      30,
+		APIUserCount:      30,
+	}
+	repGap, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: state.NewLedger(), Inventory: inv, QueryLog: gappedQL,
+		Capabilities: alloyCaps(), Now: day30, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repGap.Safety.ReportOnly || len(repGap.ActiveDrops) != 0 {
+		t.Fatalf("3-week middle gap in CoveredDates must force Report-Only mode, got reportOnly=%v drops=%d", repGap.Safety.ReportOnly, len(repGap.ActiveDrops))
+	}
+	if repGap.Safety.QueryLogCoveredDays != 10 {
+		t.Errorf("QueryLogCoveredDays = %v, want 10", repGap.Safety.QueryLogCoveredDays)
+	}
+}
+
+// Mandatory Safety Test #12 (P2.1b):
+// Observation-only analyze + explicit synth --activate + confirmed soak lifecycle.
+func TestSafetyMatrix_12_ObservationOnlyAnalyzeAndConfirmedSoak(t *testing.T) {
+	now := time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)
+	old := now.Add(-45 * 24 * time.Hour)
+	cfg := config.DefaultConfig()
+	cfg.Inventory.FixturePath = "fixture.json"
+
+	invFull := &prometheus.InventorySnapshot{
+		MetricNames: []string{
+			"live_core",
+			"dead_1",
+			"dead_hist_bucket", "dead_hist_sum", "dead_hist_count",
+			"dead_2",
+		},
+		Metadata: map[string]prometheus.MetricMetadata{
+			"dead_hist": {Type: "histogram"},
+		},
+		SeriesCounts: map[string]int{
+			"live_core":        80000,
+			"dead_1":           8000,
+			"dead_hist_bucket": 3000,
+			"dead_hist_sum":    500,
+			"dead_hist_count":  500,
+			"dead_2":           8000,
+		},
+		FirstSeenHints: map[string]time.Time{
+			"live_core": old, "dead_1": old, "dead_hist": old, "dead_2": old,
+		},
+	}
+
+	ql := func(ts time.Time) *querylog.Result {
+		return fullCoverageQueryLog(ts,
+			querylog.QueryLogEntry{Query: "live_core", Timestamp: ts.Add(-time.Hour), Origin: metrics.OriginAPIUser},
+			querylog.QueryLogEntry{Query: "rate(dead_hist_count[5m])", Timestamp: ts.Add(-time.Hour), Origin: metrics.OriginAPIUser},
+		)
+	}
+
+	ledger := state.NewLedger()
+
+	// 1. Observation-only analyze must NEVER activate tranches.
+	repObs, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: invFull, QueryLog: ql(now),
+		Capabilities: alloyCaps(), Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger.ActiveDrops) != 0 || len(ledger.Tranches) != 0 || len(repObs.ActiveDrops) != 0 {
+		t.Fatalf("observation-only analyze must not activate drops/tranches, got active=%d tranches=%d", len(ledger.ActiveDrops), len(ledger.Tranches))
+	}
+	if !repObs.Safety.NextTrancheReady || len(repObs.Tranches) == 0 {
+		t.Fatalf("expected NextTrancheReady=true with planned tranches")
+	}
+
+	// 2. Preview-next must return Tranche 1 drops WITHOUT mutating ledger.
+	repPrev, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: invFull, QueryLog: ql(now),
+		Capabilities: alloyCaps(), Now: now, PreviewNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repPrev.ActiveDrops) == 0 {
+		t.Fatal("expected PreviewNextTranche to populate ActiveDrops for preview")
+	}
+	if len(ledger.ActiveDrops) != 0 || len(ledger.Tranches) != 0 {
+		t.Fatalf("PreviewNextTranche must not mutate ledger, got active=%d tranches=%d", len(ledger.ActiveDrops), len(ledger.Tranches))
+	}
+
+	// 3. Explicit synth --activate enters pending_confirmation (Tranche 1: dead_1 + dead_hist bucket-only = 11,000 <= 15%).
+	repAct, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: invFull, QueryLog: ql(now),
+		Capabilities: alloyCaps(), Now: now, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repAct.Safety.PendingConfirmation || ledger.LatestTranche().Status != "pending_confirmation" {
+		t.Fatalf("expected pending_confirmation after ActivateNextTranche, got pending=%v status=%q", repAct.Safety.PendingConfirmation, ledger.LatestTranche().Status)
+	}
+	if len(repAct.ActiveDrops) != 2 {
+		t.Fatalf("expected 2 drops (dead_1 + dead_hist _bucket) in Tranche 1, got %+v", repAct.ActiveDrops)
+	}
+
+	// 4. 72h later with dropped series STILL in inventory => stays pending_confirmation AND warns (>48h)!
+	day3 := now.Add(72 * time.Hour)
+	repStale, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: invFull, QueryLog: ql(day3),
+		Capabilities: alloyCaps(), Now: day3, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repStale.Safety.PendingConfirmation || ledger.LatestTranche().Status != "pending_confirmation" {
+		t.Fatalf("tranche must stay pending_confirmation while series remain in inventory")
+	}
+	foundStaleWarn := false
+	for _, w := range repStale.Safety.Warnings {
+		if strings.Contains(w, "pending_confirmation for >48h") {
+			foundStaleWarn = true
+		}
+	}
+	if !foundStaleWarn {
+		t.Fatalf("expected >48h pending_confirmation warning, got %v", repStale.Safety.Warnings)
+	}
+
+	// 5. Partial drop (dead_1 dropped, dead_hist_bucket still present) => still pending_confirmation!
+	invPartial := &prometheus.InventorySnapshot{
+		MetricNames: []string{"live_core", "dead_hist_bucket", "dead_hist_sum", "dead_hist_count", "dead_2"},
+		Metadata:    invFull.Metadata,
+		SeriesCounts: map[string]int{
+			"live_core": 80000, "dead_hist_bucket": 3000, "dead_hist_sum": 500, "dead_hist_count": 500, "dead_2": 8000,
+		},
+		FirstSeenHints: invFull.FirstSeenHints,
+	}
+	repPartial, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: invPartial, QueryLog: ql(day3),
+		Capabilities: alloyCaps(), Now: day3, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repPartial.Safety.PendingConfirmation {
+		t.Fatal("expected pending_confirmation while dead_hist_bucket is still present")
+	}
+
+	// 6. Collector drops dead_1 AND dead_hist_bucket (dead_hist_sum/count remain!) => auto-confirms to soaking!
+	invConfirmed := &prometheus.InventorySnapshot{
+		MetricNames: []string{"live_core", "dead_hist_sum", "dead_hist_count", "dead_2"},
+		Metadata:    invFull.Metadata,
+		SeriesCounts: map[string]int{
+			"live_core": 80000, "dead_hist_sum": 500, "dead_hist_count": 500, "dead_2": 8000,
+		},
+		FirstSeenHints: invFull.FirstSeenHints,
+	}
+	day4 := now.Add(4 * 24 * time.Hour)
+	repSoak, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: invConfirmed, QueryLog: ql(day4),
+		Capabilities: alloyCaps(), Now: day4, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repSoak.Safety.SoakBlocked || ledger.LatestTranche().Status != "soaking" {
+		t.Fatalf("expected soaking after dropped series reached 0, got soakBlocked=%v status=%q", repSoak.Safety.SoakBlocked, ledger.LatestTranche().Status)
+	}
+	// Confirmed active drops from Tranche 1 must still be emitted in ActiveDrops even after disappearing from TSDB!
+	if len(repSoak.ActiveDrops) != 2 {
+		t.Fatalf("expected disappeared Tranche 1 drops to remain in ActiveDrops, got %+v", repSoak.ActiveDrops)
+	}
+
+	// 7. After soakWindow (day4 + 8d): observation-only analyze marks Tranche 1 soaked but does NOT activate Tranche 2.
+	day12 := day4.Add(8 * 24 * time.Hour)
+	repAfterSoakObs, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: invConfirmed, QueryLog: ql(day12),
+		Capabilities: alloyCaps(), Now: day12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.LatestTranche().Status != "soaked" || !repAfterSoakObs.Safety.NextTrancheReady {
+		t.Fatalf("expected Tranche 1 soaked and NextTrancheReady=true, got status=%q ready=%v", ledger.LatestTranche().Status, repAfterSoakObs.Safety.NextTrancheReady)
+	}
+	if len(repAfterSoakObs.ActiveDrops) != 2 {
+		t.Fatalf("observation-only analyze must not unlock Tranche 2, got %d drops", len(repAfterSoakObs.ActiveDrops))
+	}
+
+	// 8. Explicit ActivateNextTranche unlocks Tranche 2 (dead_2).
+	repT2, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: invConfirmed, QueryLog: ql(day12),
+		Capabilities: alloyCaps(), Now: day12, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repT2.ActiveDrops) != 3 || repT2.Summary.ActiveTranche != 2 {
+		t.Fatalf("expected 3 active drops in Tranche 2, got %d (tranche %d)", len(repT2.ActiveDrops), repT2.Summary.ActiveTranche)
+	}
+}
+
+// Mandatory Safety Test #13 (P2.1b):
+// Per-expression query-log wildcard detection (never unioning diverse exact queries by caller IP/User-Agent).
+func TestSafetyMatrix_13_PerExpressionQueryLogWildcards(t *testing.T) {
+	now := time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)
+	old := now.Add(-45 * 24 * time.Hour)
+	cfg := config.DefaultConfig()
+	cfg.Inventory.FixturePath = "fixture.json"
+
+	inv := &prometheus.InventorySnapshot{
+		MetricNames: []string{"m1", "m2", "m3", "m4", "dead_1"},
+		SeriesCounts: map[string]int{
+			"m1": 2000, "m2": 2000, "m3": 2000, "m4": 2000, "dead_1": 1000,
+		},
+		FirstSeenHints: map[string]time.Time{
+			"m1": old, "m2": old, "m3": old, "m4": old, "dead_1": old,
+		},
+	}
+
+	// Shared Grafana server/IP issues 4 distinct exact queries covering 80% (>50%) of inventory!
+	// Must NOT be flagged as a wildcard protector.
+	qlDiverse := fullCoverageQueryLog(now,
+		querylog.QueryLogEntry{Query: "m1", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser, ClientCaller: "Grafana/11.3"},
+		querylog.QueryLogEntry{Query: "m2", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser, ClientCaller: "Grafana/11.3"},
+		querylog.QueryLogEntry{Query: "m3", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser, ClientCaller: "Grafana/11.3"},
+		querylog.QueryLogEntry{Query: "m4", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser, ClientCaller: "Grafana/11.3"},
+	)
+	repDiv, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: state.NewLedger(), Inventory: inv, QueryLog: qlDiverse,
+		Capabilities: alloyCaps(), Now: now, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repDiv.WildcardSources) != 0 {
+		t.Fatalf("diverse exact queries from shared caller must NOT trigger wildcard detection, got %+v", repDiv.WildcardSources)
+	}
+	if len(repDiv.ActiveDrops) != 1 || repDiv.ActiveDrops[0].FamilyName != "dead_1" {
+		t.Fatalf("expected dead_1 dropped when shared caller runs diverse exact queries, got %+v", repDiv.ActiveDrops)
+	}
+
+	// Single wildcard expression `{__name__=~".+"}` from the same shared caller IS flagged!
+	qlWild := fullCoverageQueryLog(now,
+		querylog.QueryLogEntry{Query: "m1", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser, ClientCaller: "Grafana/11.3"},
+		querylog.QueryLogEntry{Query: `count({__name__=~".+"})`, Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser, ClientCaller: "Grafana/11.3", DashboardUID: "exp-uid"},
+	)
+	repWild, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: state.NewLedger(), Inventory: inv, QueryLog: qlWild,
+		Capabilities: alloyCaps(), Now: now, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repWild.WildcardSources) != 1 {
+		t.Fatalf("expected 1 WildcardSource for {__name__=~\".+\"}, got %+v", repWild.WildcardSources)
+	}
+	if !strings.Contains(repWild.WildcardSources[0].RecommendedExclude, "exp-uid") {
+		t.Errorf("expected RecommendedExclude to include dashboard_uid, got %q", repWild.WildcardSources[0].RecommendedExclude)
+	}
+	if len(repWild.ActiveDrops) != 0 {
+		t.Fatalf("unexcluded wildcard expression must protect all metrics, got %d drops", len(repWild.ActiveDrops))
+	}
+
+	// Excluding by query_regex excludes ONLY the wildcard expression while keeping `m1` protected!
+	cfgEx := config.DefaultConfig()
+	cfgEx.Inventory.FixturePath = "fixture.json"
+	cfgEx.Policy.ExcludeSources = []config.ExcludeSource{{Type: "query_regex", Value: `__name__=~"\.\+"`}}
+	repEx, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfgEx, Ledger: state.NewLedger(), Inventory: inv, QueryLog: qlWild,
+		Capabilities: alloyCaps(), Now: now, ActivateNextTranche: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range repEx.ActiveDrops {
+		if d.FamilyName == "m1" {
+			t.Fatal("excluding wildcard query_regex must NOT exclude Grafana's exact m1 query")
+		}
+	}
+	if len(repEx.ActiveDrops) != 1 || repEx.ActiveDrops[0].FamilyName != "dead_1" {
+		t.Fatalf("expected dead_1 dropped after excluding wildcard regex, got %+v", repEx.ActiveDrops)
+	}
+}
+
+func TestBaselineHWMAndDailyQueryLogRate(t *testing.T) {
+	now := time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)
+	old := now.Add(-45 * 24 * time.Hour)
+	cfg := config.DefaultConfig()
+	cfg.Inventory.FixturePath = "fixture.json"
+	cfg.Usage.Grafana = &config.GrafanaConfig{URL: "http://grafana.local"}
+
+	inv := &prometheus.InventorySnapshot{
+		MetricNames:    []string{"live_m", "dead_m"},
+		SeriesCounts:   map[string]int{"live_m": 9000, "dead_m": 1000},
+		FirstSeenHints: map[string]time.Time{"live_m": old, "dead_m": old},
+	}
+
+	makeDailyQL := func(days, perDay int) *querylog.Result {
+		dates := make(map[string]int, days)
+		for i := 0; i < days; i++ {
+			dates[now.Add(-time.Duration(i)*24*time.Hour).Format("2006-01-02")] = perDay
+		}
+		ex, _ := promql.Extract("live_m")
+		return &querylog.Result{
+			Configured:        true,
+			EarliestTimestamp: now.Add(-time.Duration(days-1) * 24 * time.Hour),
+			LatestTimestamp:   now,
+			ObservedDates:     dates,
+			TotalEntries:      days * perDay,
+			APIUserCount:      days * perDay,
+			Refs: []metrics.UsageRef{{
+				MetricName:     "live_m",
+				Origin:         metrics.OriginAPIUser,
+				SourceID:       "querylog:api-user",
+				Timestamp:      now.Add(-time.Hour),
+				PreservesAll:   ex.Accesses[0].PreservesAll,
+			}},
+		}
+	}
+
+	ledger := state.NewLedger()
+
+	// Run 1: 100 dashboards, 30d @ 100 entries/day.
+	_, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: inv,
+		QueryLog: makeDailyQL(30, 100), Grafana: &grafana.ScanResult{DashboardCount: 100},
+		Capabilities: alloyCaps(), Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Run 2: 85 dashboards (-15%, within 20% threshold) -> HWM must stay 100 (no bleed-down!),
+	// AND query-log rotation to 7d @ 100/day (-77% total entries, 0% daily rate drop) must NOT false-abort!
+	rep2, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: inv,
+		QueryLog: makeDailyQL(7, 100), Grafana: &grafana.ScanResult{DashboardCount: 85},
+		Capabilities: alloyCaps(), Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep2.Safety.BaselineDriftDetected {
+		t.Fatalf("log rotation keeping 100/d rate must not trip drift guard: %v", rep2.Safety.BaselineDriftDetails)
+	}
+	if *ledger.BaselineCounts.Dashboards != 100 {
+		t.Fatalf("HWM dashboard baseline bled down to %d, want 100", *ledger.BaselineCounts.Dashboards)
+	}
+
+	// Run 3: 75 dashboards (-25% vs HWM 100, even though only -11.8% vs 85!) -> MUST trip drift guard!
+	// Also weekend dip in query log (65/day = -35% < 50% threshold) does NOT trip query-log drift.
+	rep3, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: inv,
+		QueryLog: makeDailyQL(30, 65), Grafana: &grafana.ScanResult{DashboardCount: 75},
+		Capabilities: alloyCaps(), Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep3.Safety.BaselineDriftDetected {
+		t.Fatal("expected static HWM bleed-down guard to trip at 75 vs HWM 100")
+	}
+
+	// Run 4: Broken query log pipeline (20/day = -80% > 50% threshold) -> MUST trip drift guard!
+	rep4, err := Analyze(context.Background(), AnalyzeInput{
+		Config: cfg, Ledger: ledger, Inventory: inv,
+		QueryLog: makeDailyQL(30, 20), Grafana: &grafana.ScanResult{DashboardCount: 100},
+		Capabilities: alloyCaps(), Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep4.Safety.BaselineDriftDetected {
+		t.Fatal("expected broken query-log pipeline (20/d vs 100/d) to trip drift guard")
+	}
+}
+
+func TestStreamingDedupRegretPreservesHitCountAndLatestTS(t *testing.T) {
+	now := time.Date(2026, 11, 21, 13, 0, 0, 0, time.UTC)
+	ledger := state.NewLedger()
+	ledger.RecordTrancheActivation(1, time.Date(2026, 11, 21, 11, 0, 0, 0, time.UTC), 7*24*time.Hour, true, []metrics.Recommendation{
+		{FamilyName: "dropped_m", Action: metrics.ActionDropFamily, Series: 100},
+	})
+
+	ex, err := promql.Extract("rate(dropped_m[5m])")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := &querylog.Result{
+		Configured: true,
+		Entries: []querylog.QueryLogEntry{
+			{
+				Query:             "rate(dropped_m[5m])",
+				EarliestTimestamp: time.Date(2026, 11, 21, 8, 0, 0, 0, time.UTC),
+				Timestamp:         time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC),
+				HitCount:          3,
+				Origin:            metrics.OriginAPIUser,
+				Accesses:          ex.Accesses,
+			},
+		},
+	}
+
+	cat := GroupFamilies(&prometheus.InventorySnapshot{
+		MetricNames:  []string{"dropped_m"},
+		SeriesCounts: map[string]int{"dropped_m": 100},
+	})
+
+	policy := config.DefaultConfig().Policy
+	policy.MinRegretHits = 3
+	regrets := DetectRegrets(cat, ledger, res, policy, now)
+	if len(regrets) != 1 || regrets[0].HitCount != 3 {
+		t.Fatalf("expected regret with HitCount=3 after streaming dedup, got %+v", regrets)
+	}
+}
+
+// Phase 2.2 Safety Matrix Regression:
+// Ruler alerts & KEDA/prometheus-adapter/Argo Rollouts/Flagger protect live families & labels,
+// Ruler recording rules join the transitive DAG, static baseline drift aborts safely,
+// and static consumers alone without query logs keep Trimtab in Report-Only mode (Invariant #1).
+func TestSafetyMatrix_P22_RulersAndK8sConsumers(t *testing.T) {
+	now := time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)
+	old := now.Add(-45 * 24 * time.Hour)
+
+	inv := &prometheus.InventorySnapshot{
+		MetricNames: []string{
+			"keda_scaled_m",
+			"adapter_custom_m",
+			"rollout_canary_m",
+			"flagger_canary_m",
+			"ruler_alerted_m",
+			"ruler_live_src_m",
+			"ruler:live_rec",
+			"ruler_dead_src_m",
+			"ruler:dead_rec",
+			"truly_unused_m",
+		},
+		SeriesCounts: map[string]int{
+			"keda_scaled_m":    1000,
+			"adapter_custom_m": 1000,
+			"rollout_canary_m": 1000,
+			"flagger_canary_m": 1000,
+			"ruler_alerted_m":  1000,
+			"ruler_live_src_m": 1000,
+			"ruler:live_rec":   200,
+			"ruler_dead_src_m": 400,
+			"ruler:dead_rec":   100,
+			"truly_unused_m":   300,
+		},
+		MetricLabels: map[string][]string{
+			"keda_scaled_m":    {"service", "unused_lbl"},
+			"adapter_custom_m": {"namespace", "pod", "unused_lbl"},
+			"rollout_canary_m": {"app", "unused_lbl"},
+			"flagger_canary_m": {"namespace", "unused_lbl"},
+			"ruler_alerted_m":  {"cluster", "unused_lbl"},
+		},
+		SampleLabelSets: map[string][]map[string]string{
+			"keda_scaled_m":    {{"service": "s1", "unused_lbl": "u1"}, {"service": "s1", "unused_lbl": "u2"}},
+			"adapter_custom_m": {{"namespace": "ns1", "pod": "p1", "unused_lbl": "u1"}, {"namespace": "ns1", "pod": "p1", "unused_lbl": "u2"}},
+			"rollout_canary_m": {{"app": "a1", "unused_lbl": "u1"}, {"app": "a1", "unused_lbl": "u2"}},
+			"flagger_canary_m": {{"namespace": "ns1", "unused_lbl": "u1"}, {"namespace": "ns1", "unused_lbl": "u2"}},
+			"ruler_alerted_m":  {{"cluster": "c1", "unused_lbl": "u1"}, {"cluster": "c1", "unused_lbl": "u2"}},
+		},
+		FirstSeenHints: map[string]time.Time{
+			"keda_scaled_m": old, "adapter_custom_m": old, "rollout_canary_m": old,
+			"flagger_canary_m": old, "ruler_alerted_m": old, "ruler_live_src_m": old,
+			"ruler:live_rec": old, "ruler_dead_src_m": old, "ruler:dead_rec": old,
+			"truly_unused_m": old,
+		},
+	}
+
+	mustExtract := func(e string) []promql.MetricAccess {
+		ex, err := promql.Extract(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ex.Accesses
+	}
+
+	rulerRes := &ruler.ScanResult{
+		TotalRuleCount:     3,
+		AlertRuleCount:     1,
+		RecordingRuleCount: 2,
+		AlertRefs: []metrics.UsageRef{
+			{MetricName: "ruler_alerted_m", Origin: metrics.OriginRulerAlert, SourceID: "ruler-alert:1", ExplicitLabels: []string{"cluster"}},
+		},
+		RecordingRules: []promrules.RecordingRule{
+			{Name: "ruler:live_rec", File: "mimir-ruler/prod", Group: "g1", Expr: "rate(ruler_live_src_m[5m])", Inputs: mustExtract("rate(ruler_live_src_m[5m])")},
+			{Name: "ruler:dead_rec", File: "mimir-ruler/prod", Group: "g2", Expr: "rate(ruler_dead_src_m[5m])", Inputs: mustExtract("rate(ruler_dead_src_m[5m])")},
+		},
+	}
+
+	k8sRes := &k8sconsumers.ScanResult{
+		KEDATriggerCount:     1,
+		PromAdapterRuleCount: 1,
+		RolloutTemplateCount: 1,
+		FlaggerTemplateCount: 1,
+		Refs: []metrics.UsageRef{
+			{MetricName: "keda_scaled_m", Origin: metrics.OriginKEDA, SourceID: "keda:1", ExplicitLabels: []string{"service"}},
+			{MetricName: "adapter_custom_m", Origin: metrics.OriginPromAdapter, SourceID: "adapter:1", ExplicitLabels: []string{"namespace", "pod"}},
+			{MetricName: "rollout_canary_m", Origin: metrics.OriginArgoRollouts, SourceID: "rollout:1", ExplicitLabels: []string{"app"}},
+			{MetricName: "flagger_canary_m", Origin: metrics.OriginFlagger, SourceID: "flagger:1", ExplicitLabels: []string{"namespace"}},
+		},
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Inventory.FixturePath = "fixture.json"
+	cfg.Usage.Rulers = []config.RulerConfig{{Type: "mimir", URL: "http://mimir.local"}}
+	cfg.Usage.K8sConsumers = &config.K8sConsumersConfig{Globs: []string{"k8s/*.yaml"}}
+
+	t.Run("static P2.2 consumers alone stay in Report-Only without query logs", func(t *testing.T) {
+		rep, err := Analyze(context.Background(), AnalyzeInput{
+			Config:              cfg,
+			Ledger:              state.NewLedger(),
+			Inventory:           inv,
+			Ruler:               rulerRes,
+			K8sConsumers:        k8sRes,
+			Capabilities:        alloyCaps(),
+			Now:                 now,
+			ActivateNextTranche: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rep.Safety.ReportOnly || len(rep.ActiveDrops) != 0 || rep.Summary.Confidence != metrics.ConfidenceMedium {
+			t.Fatalf("expected ReportOnly + 0 active drops + MEDIUM confidence without query logs, got reportOnly=%v drops=%d conf=%s",
+				rep.Safety.ReportOnly, len(rep.ActiveDrops), rep.Summary.Confidence)
+		}
+	})
+
+	t.Run("protects consumers + labels, resolves ruler DAG, and enforces HWM baseline drift", func(t *testing.T) {
+		ql := fullCoverageQueryLog(now,
+			querylog.QueryLogEntry{Query: "ruler:live_rec", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser},
+		)
+		ledger := state.NewLedger()
+		fixEval := prometheus.NewFixtureCollapseEvaluator(inv)
+
+		rep, err := Analyze(context.Background(), AnalyzeInput{
+			Config:              cfg,
+			Ledger:              ledger,
+			Inventory:           inv,
+			CollapseEvaluator:   fixEval,
+			QueryLog:            ql,
+			Ruler:               rulerRes,
+			K8sConsumers:        k8sRes,
+			Capabilities:        alloyCaps(),
+			Now:                 now,
+			ActivateNextTranche: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Only ruler_dead_src_m and truly_unused_m should be dropped; all P2.2 consumer metrics & ruler_live_src_m stay safe!
+		droppedSet := map[string]bool{}
+		for _, d := range rep.ActiveDrops {
+			droppedSet[d.FamilyName] = true
+		}
+		if !droppedSet["truly_unused_m"] || !droppedSet["ruler_dead_src_m"] || len(droppedSet) != 2 {
+			t.Fatalf("expected only truly_unused_m and ruler_dead_src_m dropped, got %+v", rep.ActiveDrops)
+		}
+		for _, protected := range []string{"keda_scaled_m", "adapter_custom_m", "rollout_canary_m", "flagger_canary_m", "ruler_alerted_m", "ruler_live_src_m", "ruler:live_rec"} {
+			if _, ok := rep.ProtectedReasons[protected]; !ok {
+				t.Errorf("expected %s in ProtectedReasons", protected)
+			}
+		}
+		if len(rep.DeadRecordingRules) != 1 || rep.DeadRecordingRules[0].RuleName != "ruler:dead_rec" {
+			t.Fatalf("expected ruler:dead_rec in DeadRecordingRules, got %+v", rep.DeadRecordingRules)
+		}
+		// Used labels on P2.2 consumers must NEVER appear in unused label collapse advisories
+		for _, adv := range rep.LabelCollapseAdvisories {
+			if len(adv.UnusedLabels) != 1 || adv.UnusedLabels[0] != "unused_lbl" {
+				t.Errorf("unexpected unused labels on %s: %v", adv.FamilyName, adv.UnusedLabels)
+			}
+		}
+
+		// Partial KEDA/Ruler drop (3->1 ruler rules, 1->0 keda triggers) triggers baseline drift abort!
+		partialRuler := &ruler.ScanResult{TotalRuleCount: 1}
+		partialK8s := &k8sconsumers.ScanResult{KEDATriggerCount: 0, PromAdapterRuleCount: 1, RolloutTemplateCount: 1, FlaggerTemplateCount: 1}
+		repDrift, err := Analyze(context.Background(), AnalyzeInput{
+			Config:              cfg,
+			Ledger:              ledger,
+			Inventory:           inv,
+			QueryLog:            ql,
+			Ruler:               partialRuler,
+			K8sConsumers:        partialK8s,
+			Capabilities:        alloyCaps(),
+			Now:                 now,
+			ActivateNextTranche: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !repDrift.Safety.BaselineDriftDetected || !repDrift.Safety.Blocked {
+			t.Fatalf("expected baseline drift abort when ruler_rules/keda_triggers drop >20%%, got %+v", repDrift.Safety)
+		}
+	})
+}
+
+// Phase 2.3 Safety Matrix Regression:
+// Alertmanager protects routing/grouping/inhibit/template labels ONLY on alerted metrics,
+// Perses catch-all dashboards trigger WildcardProtector and support dashboard_uid exclusion,
+// Sloth/Pyrra SLOs protect metrics & grouping labels, baseline drift guards all three,
+// and static P2.3 consumers alone stay in Report-Only mode without query logs (Invariant #1).
+func TestSafetyMatrix_P23_AlertmanagerPersesAndSLO(t *testing.T) {
+	now := time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)
+	old := now.Add(-45 * 24 * time.Hour)
+
+	inv := &prometheus.InventorySnapshot{
+		MetricNames: []string{
+			"prom_alerted_m",
+			"grafana_alerted_m",
+			"ruler_alerted_m",
+			"dash_only_m",
+			"perses_m",
+			"slo_http_duration_seconds_bucket",
+			"slo_http_duration_seconds_sum",
+			"slo_http_duration_seconds_count",
+			"truly_unused_m",
+		},
+		Metadata: map[string]prometheus.MetricMetadata{
+			"slo_http_duration_seconds": {Type: "histogram"},
+		},
+		SeriesCounts: map[string]int{
+			"prom_alerted_m":                   1000,
+			"grafana_alerted_m":                1000,
+			"ruler_alerted_m":                  1000,
+			"dash_only_m":                      1000,
+			"perses_m":                         1000,
+			"slo_http_duration_seconds_bucket": 1000,
+			"slo_http_duration_seconds_sum":    100,
+			"slo_http_duration_seconds_count":  100,
+			"truly_unused_m":                   300,
+		},
+		MetricLabels: map[string][]string{
+			"prom_alerted_m":                   {"service", "route_lbl", "group_only_lbl", "unused_lbl"},
+			"grafana_alerted_m":                {"service", "route_lbl", "unused_lbl"},
+			"ruler_alerted_m":                  {"service", "group_only_lbl", "unused_lbl"},
+			"dash_only_m":                      {"service", "route_lbl", "group_only_lbl"},
+			"perses_m":                         {"cluster", "unused_lbl"},
+			"slo_http_duration_seconds_bucket": {"le", "endpoint", "unused_lbl"},
+		},
+		SampleLabelSets: map[string][]map[string]string{
+			"prom_alerted_m":    {{"service": "s1", "route_lbl": "r1", "group_only_lbl": "g1", "unused_lbl": "u1"}, {"service": "s1", "route_lbl": "r1", "group_only_lbl": "g1", "unused_lbl": "u2"}},
+			"grafana_alerted_m": {{"service": "s1", "route_lbl": "r1", "unused_lbl": "u1"}, {"service": "s1", "route_lbl": "r1", "unused_lbl": "u2"}},
+			"ruler_alerted_m":   {{"service": "s1", "group_only_lbl": "g1", "unused_lbl": "u1"}, {"service": "s1", "group_only_lbl": "g1", "unused_lbl": "u2"}},
+			"dash_only_m":       {{"service": "s1", "route_lbl": "r1", "group_only_lbl": "g1"}, {"service": "s1", "route_lbl": "r2", "group_only_lbl": "g2"}},
+			"perses_m":          {{"cluster": "c1", "unused_lbl": "u1"}, {"cluster": "c1", "unused_lbl": "u2"}},
+			"slo_http_duration_seconds_bucket": {
+				{"le": "0.5", "endpoint": "/pay", "unused_lbl": "u1"},
+				{"le": "0.5", "endpoint": "/pay", "unused_lbl": "u2"},
+			},
+		},
+		FirstSeenHints: map[string]time.Time{
+			"prom_alerted_m": old, "grafana_alerted_m": old, "ruler_alerted_m": old,
+			"dash_only_m": old, "perses_m": old, "slo_http_duration_seconds": old, "truly_unused_m": old,
+		},
+	}
+
+	amRes := &alertmanager.ScanResult{
+		ProtectedLabels: []string{"group_only_lbl", "route_lbl"},
+		MatcherCount:    4,
+	}
+	persesRes := &perses.ScanResult{
+		DashboardCount: 2,
+		Refs: []metrics.UsageRef{
+			{
+				MetricName:     "perses_m",
+				Origin:         metrics.OriginPersesDashboard,
+				SourceID:       "perses-dashboard:ops/service",
+				SourceName:     "Service Perses",
+				DashboardUID:   "ops/service",
+				ExplicitLabels: []string{"cluster"},
+			},
+			{
+				MetricRegex:  ".+",
+				IsRegex:      true,
+				Origin:       metrics.OriginPersesDashboard,
+				SourceID:     "perses-dashboard:ops/wildcard",
+				SourceName:   "Perses Catchall Explorer",
+				DashboardUID: "ops/wildcard",
+			},
+		},
+	}
+	sloRes := &slo.ScanResult{
+		SLOCount: 2,
+		Refs: []metrics.UsageRef{
+			{
+				MetricName:     "slo_http_duration_seconds_bucket",
+				Origin:         metrics.OriginSLO,
+				SourceID:       "slo:pyrra:latency",
+				SourceName:     "Pyrra Latency",
+				ExplicitLabels: []string{"le", "endpoint"},
+			},
+		},
+	}
+	promAlerts := &promrules.ScanResult{
+		AlertRuleCount: 1,
+		TotalRuleCount: 1,
+		AlertRefs: []metrics.UsageRef{
+			{MetricName: "prom_alerted_m", Origin: metrics.OriginPromAlert, SourceID: "prom-alert:a", ExplicitLabels: []string{"service"}},
+		},
+	}
+	grafRes := &grafana.ScanResult{
+		DashboardCount: 1,
+		AlertRuleCount: 1,
+		Refs: []metrics.UsageRef{
+			{MetricName: "grafana_alerted_m", Origin: metrics.OriginGrafanaAlert, SourceID: "grafana-alert:a", ExplicitLabels: []string{"service"}},
+			{MetricName: "dash_only_m", Origin: metrics.OriginGrafanaDashboard, SourceID: "grafana-dashboard:d1", ExplicitLabels: []string{"service"}},
+		},
+	}
+	rulerRes := &ruler.ScanResult{
+		TotalRuleCount: 1,
+		AlertRuleCount: 1,
+		AlertRefs: []metrics.UsageRef{
+			{MetricName: "ruler_alerted_m", Origin: metrics.OriginRulerAlert, SourceID: "ruler-alert:r", ExplicitLabels: []string{"service"}},
+		},
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Inventory.FixturePath = "fixture.json"
+	cfg.Usage.Alertmanager = &config.AlertmanagerConfig{URL: "http://am.local"}
+	cfg.Usage.Perses = &config.PersesConfig{URL: "http://perses.local"}
+	cfg.Usage.SLO = &config.SLOConfig{Globs: []string{"slos/*.yaml"}}
+	cfg.Usage.Grafana = &config.GrafanaConfig{URL: "http://grafana.local"}
+	cfg.Usage.PromRules = []string{"rules/*.yaml"}
+	cfg.Usage.Rulers = []config.RulerConfig{{Type: "mimir", URL: "http://mimir.local"}}
+
+	t.Run("static P2.3 sources alone stay Report-Only without query logs", func(t *testing.T) {
+		rep, err := Analyze(context.Background(), AnalyzeInput{
+			Config: cfg, Ledger: state.NewLedger(), Inventory: inv,
+			Alertmanager: amRes, Perses: persesRes, SLO: sloRes,
+			Capabilities: alloyCaps(), Now: now, ActivateNextTranche: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rep.Safety.ReportOnly || len(rep.ActiveDrops) != 0 || rep.Summary.Confidence != metrics.ConfidenceMedium {
+			t.Fatalf("expected ReportOnly with 0 drops and MEDIUM confidence, got reportOnly=%v drops=%d conf=%s",
+				rep.Safety.ReportOnly, len(rep.ActiveDrops), rep.Summary.Confidence)
+		}
+	})
+
+	t.Run("Perses catch-all wildcard flags RecommendedExclude dashboard_uid", func(t *testing.T) {
+		ql := fullCoverageQueryLog(now, querylog.QueryLogEntry{Query: "prom_alerted_m", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser})
+		rep, err := Analyze(context.Background(), AnalyzeInput{
+			Config: cfg, Ledger: state.NewLedger(), Inventory: inv, QueryLog: ql,
+			Perses: persesRes, Capabilities: alloyCaps(), Now: now, ActivateNextTranche: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rep.WildcardSources) != 1 || !strings.Contains(rep.WildcardSources[0].RecommendedExclude, `dashboard_uid="ops/wildcard"`) {
+			t.Fatalf("expected Perses wildcard source with RecommendedExclude, got %+v", rep.WildcardSources)
+		}
+		if len(rep.ActiveDrops) != 0 {
+			t.Fatalf("unexcluded Perses catch-all should protect all metrics, got %d drops", len(rep.ActiveDrops))
+		}
+	})
+
+	t.Run("Alertmanager protects alerted metric labels only, SLO/Perses protect metrics, HWM drift aborts", func(t *testing.T) {
+		exCfg := *cfg
+		exCfg.Policy.ExcludeSources = []config.ExcludeSource{{Type: "dashboard_uid", Value: "ops/wildcard"}}
+		ql := fullCoverageQueryLog(now, querylog.QueryLogEntry{Query: "sum by (service) (prom_alerted_m)", Timestamp: now.Add(-time.Hour), Origin: metrics.OriginAPIUser})
+		ledger := state.NewLedger()
+		fixEval := prometheus.NewFixtureCollapseEvaluator(inv)
+
+		rep, err := Analyze(context.Background(), AnalyzeInput{
+			Config: &exCfg, Ledger: ledger, Inventory: inv, CollapseEvaluator: fixEval,
+			QueryLog: ql, Grafana: grafRes, PromRules: promAlerts, Ruler: rulerRes,
+			Alertmanager: amRes, Perses: persesRes, SLO: sloRes,
+			Capabilities: alloyCaps(), Now: now, ActivateNextTranche: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rep.ActiveDrops) != 1 || rep.ActiveDrops[0].FamilyName != "truly_unused_m" {
+			t.Fatalf("expected ONLY truly_unused_m dropped, got %+v", rep.ActiveDrops)
+		}
+
+		byAdv := map[string][]string{}
+		for _, adv := range rep.LabelCollapseAdvisories {
+			byAdv[adv.FamilyName] = adv.UnusedLabels
+		}
+		for _, alertedFam := range []string{"prom_alerted_m", "grafana_alerted_m", "ruler_alerted_m"} {
+			if unused := byAdv[alertedFam]; !slices.Equal(unused, []string{"unused_lbl"}) {
+				t.Errorf("%s unused labels = %v, want [unused_lbl] (Alertmanager labels must be protected)", alertedFam, unused)
+			}
+		}
+		// dash_only_m has no alert refs, so Alertmanager labels must NOT falsely protect its unused labels!
+		if dashUnused := byAdv["dash_only_m"]; !slices.Contains(dashUnused, "route_lbl") || !slices.Contains(dashUnused, "group_only_lbl") {
+			t.Errorf("dash_only_m should not receive Alertmanager label protection, got unused=%v", dashUnused)
+		}
+		if sloUnused := byAdv["slo_http_duration_seconds"]; !slices.Equal(sloUnused, []string{"unused_lbl"}) {
+			t.Errorf("slo_http_duration_seconds unused labels = %v, want [unused_lbl]", sloUnused)
+		}
+		if persesUnused := byAdv["perses_m"]; !slices.Equal(persesUnused, []string{"unused_lbl"}) {
+			t.Errorf("perses_m unused labels = %v, want [unused_lbl]", persesUnused)
+		}
+
+		// Baseline drift (>20% drop across AlertmanagerMatchers, PersesDashboards, SLOs) aborts synthesis!
+		partialAM := &alertmanager.ScanResult{ProtectedLabels: amRes.ProtectedLabels, MatcherCount: 1}
+		partialPerses := &perses.ScanResult{DashboardCount: 1, Refs: persesRes.Refs}
+		partialSLO := &slo.ScanResult{SLOCount: 1, Refs: sloRes.Refs}
+		repDrift, err := Analyze(context.Background(), AnalyzeInput{
+			Config: &exCfg, Ledger: ledger, Inventory: inv, QueryLog: ql,
+			Grafana: grafRes, PromRules: promAlerts, Ruler: rulerRes,
+			Alertmanager: partialAM, Perses: partialPerses, SLO: partialSLO,
+			Capabilities: alloyCaps(), Now: now, ActivateNextTranche: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !repDrift.Safety.BaselineDriftDetected || !repDrift.Safety.Blocked {
+			t.Fatalf("expected P2.3 baseline drift abort, got %+v", repDrift.Safety)
+		}
+	})
 }

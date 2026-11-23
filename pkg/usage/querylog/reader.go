@@ -22,15 +22,28 @@ import (
 // QueryLogEntry represents one classified entry from Prometheus query_log_file,
 // prom-analytics-proxy, or Loki-shipped query logs.
 type QueryLogEntry struct {
-	Query        string                `json:"query"`
-	Timestamp    time.Time             `json:"timestamp"`
-	Origin       metrics.UsageOrigin   `json:"origin"`
-	RuleGroup    string                `json:"ruleGroup,omitempty"`
-	RuleFile     string                `json:"ruleFile,omitempty"`
-	ClientCaller string                `json:"clientCaller,omitempty"`
-	HTTPPath     string                `json:"httpPath,omitempty"`
-	SourceFile   string                `json:"sourceFile,omitempty"`
-	Accesses     []promql.MetricAccess `json:"accesses,omitempty"`
+	Query             string                `json:"query"`
+	Timestamp         time.Time             `json:"timestamp"`
+	EarliestTimestamp time.Time             `json:"earliestTimestamp,omitempty"`
+	HitCount          int                   `json:"hitCount,omitempty"`
+	Origin            metrics.UsageOrigin   `json:"origin"`
+	RuleGroup         string                `json:"ruleGroup,omitempty"`
+	RuleFile          string                `json:"ruleFile,omitempty"`
+	ClientCaller      string                `json:"clientCaller,omitempty"`
+	DashboardUID      string                `json:"dashboardUID,omitempty"`
+	HTTPPath          string                `json:"httpPath,omitempty"`
+	SourceFile        string                `json:"sourceFile,omitempty"`
+	Accesses          []promql.MetricAccess `json:"accesses,omitempty"`
+}
+
+type entryDedupKey struct {
+	dayUTC       string
+	query        string
+	origin       metrics.UsageOrigin
+	caller       string
+	dashboardUID string
+	ruleGroup    string
+	httpPath     string
 }
 
 // Result holds all parsed and classified query-log entries plus coverage metrics.
@@ -40,29 +53,37 @@ type Result struct {
 	Refs              []metrics.UsageRef
 	EarliestTimestamp time.Time
 	LatestTimestamp   time.Time
+	ObservedDates     map[string]int
 	TotalEntries      int
 	APIUserCount      int
 	RuleEvalCount     int
 	ExcludedCount     int
 	FilesScanned      int
 	Warnings          []string
+
+	dedupIndex      map[entryDedupKey]int
+	dedupRefIndices map[entryDedupKey][]int
 }
 
 type excludeMatcher struct {
-	callers map[string]struct{}
-	paths   map[string]struct{}
-	regexes []*regexp.Regexp
+	callers       map[string]struct{}
+	dashboardUIDs map[string]struct{}
+	paths         map[string]struct{}
+	regexes       []*regexp.Regexp
 }
 
 func newExcludeMatcher(excludes []config.ExcludeSource) *excludeMatcher {
 	m := &excludeMatcher{
-		callers: make(map[string]struct{}),
-		paths:   make(map[string]struct{}),
+		callers:       make(map[string]struct{}),
+		dashboardUIDs: make(map[string]struct{}),
+		paths:         make(map[string]struct{}),
 	}
 	for _, ex := range excludes {
 		switch ex.Type {
 		case "query_caller":
 			m.callers[strings.ToLower(strings.TrimSpace(ex.Value))] = struct{}{}
+		case "dashboard_uid":
+			m.dashboardUIDs[strings.TrimSpace(ex.Value)] = struct{}{}
 		case "query_path":
 			m.paths[strings.TrimSpace(ex.Value)] = struct{}{}
 		case "query_regex":
@@ -74,7 +95,12 @@ func newExcludeMatcher(excludes []config.ExcludeSource) *excludeMatcher {
 	return m
 }
 
-func (m *excludeMatcher) isExcluded(caller, path, query string) bool {
+func (m *excludeMatcher) isExcluded(caller, dashboardUID, path, query string) bool {
+	if dashboardUID != "" {
+		if _, ok := m.dashboardUIDs[dashboardUID]; ok {
+			return true
+		}
+	}
 	if caller != "" {
 		lc := strings.ToLower(caller)
 		if _, ok := m.callers[lc]; ok {
@@ -101,7 +127,9 @@ func (m *excludeMatcher) isExcluded(caller, path, query string) bool {
 
 // ReadSources loads all configured query-log sources (local globs/dirs and Loki).
 func ReadSources(ctx context.Context, sources []config.QueryLogSourceConfig, excludes []config.ExcludeSource, window time.Duration, now time.Time) (*Result, error) {
-	res := &Result{}
+	res := &Result{
+		ObservedDates: make(map[string]int),
+	}
 	if len(sources) == 0 {
 		return res, nil
 	}
@@ -210,7 +238,7 @@ func readQueryLogFile(path, format string, matcher *excludeMatcher, cache map[st
 			return fmt.Errorf("parse JSON array query log %s: %w", path, err)
 		}
 		for _, raw := range rows {
-			ingestJSONLine(raw, format, path, matcher, cache, res)
+			ingestJSONLine(raw, format, path, time.Time{}, matcher, cache, res)
 		}
 		return nil
 	}
@@ -222,7 +250,7 @@ func readQueryLogFile(path, format string, matcher *excludeMatcher, cache map[st
 		if line == "" {
 			continue
 		}
-		ingestJSONLine([]byte(line), format, path, matcher, cache, res)
+		ingestJSONLine([]byte(line), format, path, time.Time{}, matcher, cache, res)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("scan query log %s: %w", path, err)
@@ -239,10 +267,10 @@ type rawQueryLogLine struct {
 		End   string `json:"end"`
 	} `json:"params"`
 	HTTPRequest *struct {
-		ClientIP string              `json:"clientIP"`
-		Method   string              `json:"method"`
-		Path     string              `json:"path"`
-		Headers  map[string]any      `json:"headers"`
+		ClientIP string         `json:"clientIP"`
+		Method   string         `json:"method"`
+		Path     string         `json:"path"`
+		Headers  map[string]any `json:"headers"`
 	} `json:"httpRequest"`
 	RuleGroup *struct {
 		File string `json:"file"`
@@ -250,19 +278,21 @@ type rawQueryLogLine struct {
 	} `json:"ruleGroup"`
 	TS string `json:"ts"`
 
-	// prom-analytics-proxy / generic schema:
+	// prom-analytics-proxy / Mimir JSON / generic schema:
 	Query      string         `json:"query"`
 	QueryParam string         `json:"queryParam"`
+	ParamQuery string         `json:"param_query"`
 	Timestamp  string         `json:"timestamp"`
 	Time       string         `json:"time"`
 	ClientIP   string         `json:"clientIP"`
 	Caller     string         `json:"caller"`
+	UserAgent  string         `json:"user_agent"`
 	Path       string         `json:"path"`
 	Headers    map[string]any `json:"httpHeaders"`
 	Origin     string         `json:"origin"`
 }
 
-func ingestJSONLine(raw []byte, format, sourceFile string, matcher *excludeMatcher, cache map[string]*promql.ExtractResult, res *Result) {
+func ingestJSONLine(raw []byte, format, sourceFile string, fallbackTS time.Time, matcher *excludeMatcher, cache map[string]*promql.ExtractResult, res *Result) {
 	var row rawQueryLogLine
 	if err := json.Unmarshal(raw, &row); err != nil {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("querylog %s: skipped malformed JSON line", filepath.Base(sourceFile)))
@@ -274,6 +304,8 @@ func ingestJSONLine(raw []byte, format, sourceFile string, matcher *excludeMatch
 		query = row.Params.Query
 	} else if row.Query != "" {
 		query = row.Query
+	} else if row.ParamQuery != "" {
+		query = row.ParamQuery
 	} else if row.QueryParam != "" {
 		query = row.QueryParam
 	}
@@ -286,12 +318,21 @@ func ingestJSONLine(raw []byte, format, sourceFile string, matcher *excludeMatch
 	if ts.IsZero() && row.Params != nil {
 		ts = parseTimestamp(row.Params.End, row.Params.Start)
 	}
+	if ts.IsZero() && !fallbackTS.IsZero() {
+		ts = fallbackTS.UTC()
+	}
 
 	caller := row.Caller
+	dashboardUID := ""
+	userAgent := row.UserAgent
 	httpPath := row.Path
-	isPromAnalyticsProxy := format == "prom-analytics-proxy" || (row.Params == nil && (row.Query != "" || row.QueryParam != ""))
+	isPromAnalyticsProxy := format == "prom-analytics-proxy" || (row.Params == nil && (row.Query != "" || row.QueryParam != "" || row.ParamQuery != ""))
 
 	if row.HTTPRequest != nil {
+		dashboardUID = extractHeaderCaseInsensitive(row.HTTPRequest.Headers, "X-Dashboard-UID")
+		if ua := extractHeaderCaseInsensitive(row.HTTPRequest.Headers, "User-Agent"); ua != "" {
+			userAgent = ua
+		}
 		if caller == "" {
 			caller = extractCallerFromHeaders(row.HTTPRequest.Headers, row.HTTPRequest.ClientIP)
 		}
@@ -299,9 +340,16 @@ func ingestJSONLine(raw []byte, format, sourceFile string, matcher *excludeMatch
 			httpPath = row.HTTPRequest.Path
 		}
 	} else if isPromAnalyticsProxy {
+		dashboardUID = extractHeaderCaseInsensitive(row.Headers, "X-Dashboard-UID")
+		if ua := extractHeaderCaseInsensitive(row.Headers, "User-Agent"); ua != "" {
+			userAgent = ua
+		}
 		if caller == "" {
 			caller = extractCallerFromHeaders(row.Headers, row.ClientIP)
 		}
+	}
+	if caller == "" && userAgent != "" {
+		caller = userAgent
 	}
 
 	// Origin classification (Invariant #2):
@@ -314,18 +362,34 @@ func ingestJSONLine(raw []byte, format, sourceFile string, matcher *excludeMatch
 		ruleFile = row.RuleGroup.File
 	} else if row.HTTPRequest == nil && !isPromAnalyticsProxy {
 		origin = metrics.OriginRuleEval
-	} else if matcher.isExcluded(caller, httpPath, query) {
+	} else if isSelfTrimtabCaller(caller, userAgent) || matcher.isExcluded(caller, dashboardUID, httpPath, query) {
 		origin = metrics.OriginExcludedExplorer
 	} else {
 		origin = metrics.OriginAPIUser
 	}
 
-	recordEntry(query, ts, origin, ruleGroup, ruleFile, caller, httpPath, sourceFile, cache, res)
+	recordEntry(query, ts, origin, ruleGroup, ruleFile, caller, dashboardUID, httpPath, sourceFile, cache, res)
 }
 
-func recordEntry(query string, ts time.Time, origin metrics.UsageOrigin, ruleGroup, ruleFile, caller, httpPath, sourceFile string, cache map[string]*promql.ExtractResult, res *Result) {
+func isSelfTrimtabCaller(caller, userAgent string) bool {
+	if caller != "" && strings.Contains(strings.ToLower(caller), "trimtab/") {
+		return true
+	}
+	if userAgent != "" && strings.Contains(strings.ToLower(userAgent), "trimtab/") {
+		return true
+	}
+	return false
+}
+
+func recordEntry(query string, ts time.Time, origin metrics.UsageOrigin, ruleGroup, ruleFile, caller, dashboardUID, httpPath, sourceFile string, cache map[string]*promql.ExtractResult, res *Result) {
 	res.TotalEntries++
+	dayUTC := ""
 	if !ts.IsZero() {
+		dayUTC = ts.UTC().Format("2006-01-02")
+		if res.ObservedDates == nil {
+			res.ObservedDates = make(map[string]int)
+		}
+		res.ObservedDates[dayUTC]++
 		if res.EarliestTimestamp.IsZero() || ts.Before(res.EarliestTimestamp) {
 			res.EarliestTimestamp = ts
 		}
@@ -341,6 +405,42 @@ func recordEntry(query string, ts time.Time, origin metrics.UsageOrigin, ruleGro
 		res.RuleEvalCount++
 	case metrics.OriginExcludedExplorer:
 		res.ExcludedCount++
+	}
+
+	// Memory-bounded streaming deduplication by (dayUTC, query, origin, caller, dashboardUID, ruleGroup, httpPath).
+	// Preserves HitCount, EarliestTimestamp, and LatestTS (Timestamp) for Regret Detection (Invariant #10).
+	key := entryDedupKey{
+		dayUTC:       dayUTC,
+		query:        query,
+		origin:       origin,
+		caller:       caller,
+		dashboardUID: dashboardUID,
+		ruleGroup:    ruleGroup,
+		httpPath:     httpPath,
+	}
+	if res.dedupIndex == nil {
+		res.dedupIndex = make(map[entryDedupKey]int)
+	}
+	if idx, exists := res.dedupIndex[key]; exists {
+		existing := &res.Entries[idx]
+		if existing.HitCount <= 0 {
+			existing.HitCount = 1
+		}
+		existing.HitCount++
+		if !ts.IsZero() {
+			if existing.EarliestTimestamp.IsZero() || ts.Before(existing.EarliestTimestamp) {
+				existing.EarliestTimestamp = ts
+			}
+			if existing.Timestamp.IsZero() || ts.After(existing.Timestamp) {
+				existing.Timestamp = ts
+				for _, refIdx := range res.dedupRefIndices[key] {
+					if refIdx >= 0 && refIdx < len(res.Refs) {
+						res.Refs[refIdx].Timestamp = ts
+					}
+				}
+			}
+		}
+		return
 	}
 
 	var accesses []promql.MetricAccess
@@ -362,17 +462,22 @@ func recordEntry(query string, ts time.Time, origin metrics.UsageOrigin, ruleGro
 	}
 
 	entry := QueryLogEntry{
-		Query:        query,
-		Timestamp:    ts,
-		Origin:       origin,
-		RuleGroup:    ruleGroup,
-		RuleFile:     ruleFile,
-		ClientCaller: caller,
-		HTTPPath:     httpPath,
-		SourceFile:   sourceFile,
-		Accesses:     accesses,
+		Query:             query,
+		Timestamp:         ts,
+		EarliestTimestamp: ts,
+		HitCount:          1,
+		Origin:            origin,
+		RuleGroup:         ruleGroup,
+		RuleFile:          ruleFile,
+		ClientCaller:      caller,
+		DashboardUID:      dashboardUID,
+		HTTPPath:          httpPath,
+		SourceFile:        sourceFile,
+		Accesses:          accesses,
 	}
+	entryIdx := len(res.Entries)
 	res.Entries = append(res.Entries, entry)
+	res.dedupIndex[key] = entryIdx
 
 	if origin == metrics.OriginExcludedExplorer {
 		return
@@ -388,7 +493,11 @@ func recordEntry(query string, ts time.Time, origin metrics.UsageOrigin, ruleGro
 		sourceName = "rule-eval " + ruleGroup
 	}
 
+	if res.dedupRefIndices == nil {
+		res.dedupRefIndices = make(map[entryDedupKey][]int)
+	}
 	for _, acc := range accesses {
+		refIdx := len(res.Refs)
 		res.Refs = append(res.Refs, metrics.UsageRef{
 			MetricName:     acc.MetricName,
 			MetricRegex:    acc.MetricRegex,
@@ -396,6 +505,7 @@ func recordEntry(query string, ts time.Time, origin metrics.UsageOrigin, ruleGro
 			Origin:         origin,
 			SourceID:       sourceID,
 			SourceName:     sourceName,
+			DashboardUID:   dashboardUID,
 			Query:          query,
 			Timestamp:      ts,
 			ExplicitLabels: acc.ExplicitLabels,
@@ -404,7 +514,19 @@ func recordEntry(query string, ts time.Time, origin metrics.UsageOrigin, ruleGro
 			ClientCaller:   caller,
 			HTTPPath:       httpPath,
 		})
+		res.dedupRefIndices[key] = append(res.dedupRefIndices[key], refIdx)
 	}
+}
+
+func extractHeaderCaseInsensitive(headers map[string]any, key string) string {
+	for k, v := range headers {
+		if strings.EqualFold(k, key) {
+			if s := headerString(v); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 func extractCallerFromHeaders(headers map[string]any, clientIP string) string {

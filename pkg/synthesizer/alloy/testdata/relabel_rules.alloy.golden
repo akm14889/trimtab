@@ -1,0 +1,8 @@
+// Managed by Trimtab — DO NOT EDIT MANUALLY
+// Audit: 2026-11-21 | Coverage: 30/30d | Tranche 1 of 4 (14.8% series) | Regrets: 0
+// Prometheus/Alloy relabel regexes are implicitly anchored.
+rule {
+  source_labels = ["__name__"]
+  regex         = "checkout_legacy_cart_gauge|orders_deprecated_latency_seconds_(bucket|sum|count|created)"
+  action        = "drop"
+}

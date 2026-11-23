@@ -1,0 +1,18 @@
+Trimtab has been deployed as a read-only observation CronJob ({{ include "trimtab.fullname" . }}).
+
+1. Verify backend connectivity, authentication, TLS certificates, and permissions:
+{{- if .Values.doctorTest.enabled }}
+   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+{{- else }}
+   kubectl create job --from=cronjob/{{ include "trimtab.fullname" . }} {{ include "trimtab.fullname" . }}-doctor -n {{ .Release.Namespace }}
+{{- end }}
+
+2. Trigger an immediate observation audit without waiting for the schedule ({{ .Values.cronjob.schedule }}):
+   kubectl create job --from=cronjob/{{ include "trimtab.fullname" . }} {{ include "trimtab.fullname" . }}-manual -n {{ .Release.Namespace }}
+   kubectl logs -n {{ .Release.Namespace }} -l job-name={{ include "trimtab.fullname" . }}-manual --tail=200
+
+3. Safety notice:
+   The scheduled CronJob only runs `trimtab analyze`. It records metric observations
+   into the State Ledger ({{ .Values.config.statePath }}) and never automatically activates
+   drop rules. Use `trimtab synth --preview-next` / `--activate` after the observation
+   window passes.

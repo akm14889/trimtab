@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Trimtab Helm Chart Values",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+        "tag": { "type": "string" }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "automount": { "type": "boolean" },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "name": { "type": "string" }
+      }
+    },
+    "cronjob": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schedule": { "type": "string", "minLength": 1 },
+        "timeZone": { "type": "string" },
+        "concurrencyPolicy": { "type": "string", "enum": ["Allow", "Forbid", "Replace"] },
+        "suspend": { "type": "boolean" },
+        "successfulJobsHistoryLimit": { "type": "integer", "minimum": 0 },
+        "failedJobsHistoryLimit": { "type": "integer", "minimum": 0 },
+        "startingDeadlineSeconds": { "type": ["integer", "null"], "minimum": 0 },
+        "backoffLimit": { "type": "integer", "minimum": 0 },
+        "activeDeadlineSeconds": { "type": ["integer", "null"], "minimum": 1 },
+        "ttlSecondsAfterFinished": { "type": ["integer", "null"], "minimum": 0 },
+        "reportFormat": { "type": "string", "enum": ["table", "markdown", "json"] },
+        "noStateWrite": { "type": "boolean" },
+        "extraArgs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "doctorTest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "format": { "type": "string", "enum": ["table", "json"] }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "existingClaim": { "type": "string" },
+        "storageClassName": { "type": "string" },
+        "accessModes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "size": { "type": "string", "minLength": 1 },
+        "mountPath": { "type": "string", "minLength": 1 },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
+    "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+    "podSecurityContext": { "type": "object", "additionalProperties": true },
+    "securityContext": { "type": "object", "additionalProperties": true },
+    "resources": { "type": "object", "additionalProperties": true },
+    "env": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "envFrom": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "extraVolumes": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "extraVolumeMounts": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+    "tolerations": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "affinity": { "type": "object", "additionalProperties": true },
+    "config": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["inventory", "synthesizer"],
+      "properties": {
+        "name": { "type": "string" },
+        "statePath": { "type": "string" },
+        "inventory": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "prometheusURL": { "type": "string" },
+            "fixturePath": { "type": "string" },
+            "tenantID": { "type": "string" },
+            "bearerToken": { "type": "string" },
+            "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+            "headersEnv": { "type": "object", "additionalProperties": { "type": "string" } },
+            "headersFile": { "type": "object", "additionalProperties": { "type": "string" } },
+            "auth": { "$ref": "#/$defs/httpAuth" },
+            "selector": { "type": "string" },
+            "tsdbLimit": { "type": "integer", "minimum": 1 },
+            "probeFirstSeen": { "type": "boolean" },
+            "timeout": { "type": "string" },
+            "enableCollapseQueries": { "type": ["boolean", "null"] },
+            "maxCollapseFamilies": { "type": "integer", "minimum": 1 },
+            "namingMode": {
+              "type": "string",
+              "enum": [
+                "prometheus_receiver",
+                "utf8_no_translation",
+                "explicit_otlp",
+                "translated_ambiguous"
+              ]
+            },
+            "otlpNameMap": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
+        "usage": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "properties": {
+            "grafana": {
+              "type": ["object", "null"],
+              "additionalProperties": true,
+              "properties": {
+                "url": { "type": "string" },
+                "tenantID": { "type": "string" },
+                "apiKey": { "type": "string" },
+                "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                "headersEnv": { "type": "object", "additionalProperties": { "type": "string" } },
+                "headersFile": { "type": "object", "additionalProperties": { "type": "string" } },
+                "auth": { "$ref": "#/$defs/httpAuth" },
+                "dashboardsDir": { "type": "string" },
+                "alertRulesPath": { "type": "string" },
+                "alertAPI": { "type": "string", "enum": ["provisioning", "ruler"] },
+                "enableManagedAlerts": { "type": "boolean" },
+                "timeout": { "type": "string" }
+              }
+            },
+            "queryLogs": {
+              "type": ["array", "null"],
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "glob": { "type": "string" },
+                  "format": { "type": "string" },
+                  "loki": {
+                    "type": ["object", "null"],
+                    "additionalProperties": true,
+                    "properties": {
+                      "url": { "type": "string" },
+                      "query": { "type": "string" },
+                      "tenantID": { "type": "string" },
+                      "bearerToken": { "type": "string" },
+                      "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                      "headersEnv": { "type": "object", "additionalProperties": { "type": "string" } },
+                      "headersFile": { "type": "object", "additionalProperties": { "type": "string" } },
+                      "auth": { "$ref": "#/$defs/httpAuth" },
+                      "window": { "type": "string" },
+                      "chunkSize": { "type": "string" },
+                      "limit": { "type": "integer", "minimum": 1 },
+                      "maxPagesPerChunk": { "type": "integer", "minimum": 1 },
+                      "timeout": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            },
+            "promRules": {
+              "type": ["array", "null"],
+              "items": { "type": "string" }
+            },
+            "rulers": {
+              "type": ["array", "null"],
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": ["mimir", "cortex", "prometheus", "thanos"]
+                  },
+                  "url": { "type": "string" },
+                  "tenantID": { "type": "string" },
+                  "bearerToken": { "type": "string" },
+                  "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                  "headersEnv": { "type": "object", "additionalProperties": { "type": "string" } },
+                  "headersFile": { "type": "object", "additionalProperties": { "type": "string" } },
+                  "auth": { "$ref": "#/$defs/httpAuth" },
+                  "timeout": { "type": "string" }
+                }
+              }
+            },
+            "k8sConsumers": {
+              "type": ["object", "null"],
+              "additionalProperties": true,
+              "properties": {
+                "globs": { "type": ["array", "null"], "items": { "type": "string" } },
+                "enableKEDA": { "type": ["boolean", "null"] },
+                "enablePromAdapter": { "type": ["boolean", "null"] },
+                "enableArgoRollouts": { "type": ["boolean", "null"] },
+                "enableFlagger": { "type": ["boolean", "null"] }
+              }
+            },
+            "alertmanager": {
+              "type": ["object", "null"],
+              "additionalProperties": true,
+              "properties": {
+                "configPaths": { "type": ["array", "null"], "items": { "type": "string" } },
+                "url": { "type": "string" },
+                "tenantID": { "type": "string" },
+                "bearerToken": { "type": "string" },
+                "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                "headersEnv": { "type": "object", "additionalProperties": { "type": "string" } },
+                "headersFile": { "type": "object", "additionalProperties": { "type": "string" } },
+                "auth": { "$ref": "#/$defs/httpAuth" },
+                "timeout": { "type": "string" }
+              }
+            },
+            "perses": {
+              "type": ["object", "null"],
+              "additionalProperties": true,
+              "properties": {
+                "url": { "type": "string" },
+                "tenantID": { "type": "string" },
+                "apiKey": { "type": "string" },
+                "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                "headersEnv": { "type": "object", "additionalProperties": { "type": "string" } },
+                "headersFile": { "type": "object", "additionalProperties": { "type": "string" } },
+                "auth": { "$ref": "#/$defs/httpAuth" },
+                "dashboardsDir": { "type": "string" },
+                "projects": { "type": ["array", "null"], "items": { "type": "string" } },
+                "timeout": { "type": "string" }
+              }
+            },
+            "slo": {
+              "type": ["object", "null"],
+              "additionalProperties": true,
+              "properties": {
+                "globs": { "type": ["array", "null"], "items": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "policy": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "properties": {
+            "minObservationWindow": { "type": "string" },
+            "soakWindow": { "type": "string" },
+            "soakStartMode": { "type": "string", "enum": ["observed", "immediate"] },
+            "confirmationMaxRemainingPercent": { "type": "number", "minimum": 0, "maximum": 100 },
+            "maxDropPercentPerTranche": { "type": "number", "minimum": 0, "maximum": 100 },
+            "maxTotalDroppablePercent": { "type": "number", "minimum": 0, "maximum": 100 },
+            "baselineDriftThresholdPercent": { "type": "number", "minimum": 0, "maximum": 100 },
+            "queryLogBaselineDriftThresholdPercent": { "type": "number", "minimum": 0, "maximum": 100 },
+            "wildcardThresholdPercent": { "type": "number", "minimum": 0, "maximum": 100 },
+            "regretThreshold": { "type": "integer", "minimum": 1 },
+            "minRegretHits": { "type": "integer", "minimum": 0 },
+            "neverDrop": { "type": ["array", "null"], "items": { "type": "string" } },
+            "disableDefaultNeverDrop": { "type": "boolean" },
+            "excludeSources": {
+              "type": ["array", "null"],
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "type": { "type": "string" },
+                  "value": { "type": "string" }
+                }
+              }
+            },
+            "excludeRegretCallers": { "type": ["array", "null"], "items": { "type": "string" } }
+          }
+        },
+        "synthesizer": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "target": { "type": "string", "enum": ["alloy", "otel", "promrw", "prometheus-remote-write"] },
+            "outputPath": { "type": "string" },
+            "alloy": {
+              "type": ["object", "null"],
+              "additionalProperties": true,
+              "properties": {
+                "mode": { "type": "string", "enum": ["module", "relabel_rules", "configmap"] },
+                "configMapName": { "type": "string" },
+                "configMapNamespace": { "type": "string" },
+                "configMapKey": { "type": "string" },
+                "maxTermsPerRule": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "promRW": {
+              "type": ["object", "null"],
+              "additionalProperties": true,
+              "properties": {
+                "mode": { "type": "string", "enum": ["relabel_configs", "remote_write", "prometheus_operator_patch"] },
+                "remoteWriteName": { "type": "string" },
+                "remoteWriteURL": { "type": "string" },
+                "operatorKind": { "type": "string" },
+                "operatorName": { "type": "string" },
+                "operatorNamespace": { "type": "string" },
+                "maxTermsPerRule": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "httpAuth": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "bearerToken": { "type": "string" },
+        "bearerTokenEnv": { "type": "string" },
+        "bearerTokenFile": { "type": "string" },
+        "basicAuth": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "username": { "type": "string" },
+            "usernameEnv": { "type": "string" },
+            "usernameFile": { "type": "string" },
+            "password": { "type": "string" },
+            "passwordEnv": { "type": "string" },
+            "passwordFile": { "type": "string" }
+          }
+        },
+        "headersEnv": { "type": "object", "additionalProperties": { "type": "string" } },
+        "headersFile": { "type": "object", "additionalProperties": { "type": "string" } },
+        "tls": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "caFile": { "type": "string" },
+            "certFile": { "type": "string" },
+            "keyFile": { "type": "string" },
+            "serverName": { "type": "string" },
+            "insecureSkipVerify": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

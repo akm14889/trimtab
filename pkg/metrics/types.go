@@ -41,13 +41,22 @@ const (
 	OriginGrafanaAlert     UsageOrigin = "grafana-alert"
 	OriginPromAlert        UsageOrigin = "prom-alert"
 	OriginPromRecording    UsageOrigin = "prom-recording"
+	OriginRulerAlert       UsageOrigin = "ruler-alert"
+	OriginKEDA             UsageOrigin = "keda"
+	OriginPromAdapter      UsageOrigin = "prometheus-adapter"
+	OriginArgoRollouts     UsageOrigin = "argo-rollouts"
+	OriginFlagger          UsageOrigin = "flagger"
+	OriginPersesDashboard  UsageOrigin = "perses-dashboard"
+	OriginSLO              UsageOrigin = "slo"
 )
 
 // IsLiveSink returns true for origins that directly indicate an active end-consumer.
 // Recording-rule evals and recording-rule definitions are NOT live sinks; they feed the DAG only.
 func (o UsageOrigin) IsLiveSink() bool {
 	switch o {
-	case OriginAPIUser, OriginGrafanaDashboard, OriginGrafanaAlert, OriginPromAlert:
+	case OriginAPIUser, OriginGrafanaDashboard, OriginGrafanaAlert, OriginPromAlert,
+		OriginRulerAlert, OriginKEDA, OriginPromAdapter, OriginArgoRollouts, OriginFlagger,
+		OriginPersesDashboard, OriginSLO:
 		return true
 	default:
 		return false
@@ -123,6 +132,7 @@ type UsageRef struct {
 	SourceName     string      `json:"sourceName"`
 	SourceTags     []string    `json:"sourceTags,omitempty"`
 	SourceFolder   string      `json:"sourceFolder,omitempty"`
+	DashboardUID   string      `json:"dashboardUID,omitempty"`
 	Query          string      `json:"query,omitempty"`
 	Timestamp      time.Time   `json:"timestamp,omitempty"`
 	ExplicitLabels []string    `json:"explicitLabels,omitempty"`
@@ -243,6 +253,7 @@ type FamilyUsage struct {
 	TransitivelyLive     bool        `json:"transitivelyLive"`
 	TransitiveLiveVia    []string    `json:"transitiveLiveVia,omitempty"`
 	DeadRecordingChain   []string    `json:"deadRecordingChain,omitempty"`
+	LiveFromLedger       bool        `json:"liveFromLedger,omitempty"`
 	UsedBuckets          bool        `json:"usedBuckets"`
 	UsedSumOrCount       bool        `json:"usedSumOrCount"`
 	UsedBaseMetric       bool        `json:"usedBaseMetric"`
@@ -257,7 +268,7 @@ func (fu *FamilyUsage) HasDirectLiveUsage() bool {
 }
 
 func (fu *FamilyUsage) IsLive() bool {
-	return fu.HasDirectLiveUsage() || fu.TransitivelyLive
+	return fu.HasDirectLiveUsage() || fu.TransitivelyLive || fu.LiveFromLedger
 }
 
 // UsageIndex maps metric family names to their aggregated usage.
@@ -288,13 +299,14 @@ func (idx *UsageIndex) GetOrCreate(family string) *FamilyUsage {
 
 // WildcardSource flags a single source matching >wildcardThresholdPercent of inventory (Invariant #6).
 type WildcardSource struct {
-	SourceID        string      `json:"sourceID"`
-	SourceName      string      `json:"sourceName"`
-	Origin          UsageOrigin `json:"origin"`
-	MatchedFamilies int         `json:"matchedFamilies"`
-	TotalFamilies   int         `json:"totalFamilies"`
-	MatchPercent    float64     `json:"matchPercent"`
-	Excluded        bool        `json:"excluded"`
+	SourceID           string      `json:"sourceID"`
+	SourceName         string      `json:"sourceName"`
+	Origin             UsageOrigin `json:"origin"`
+	MatchedFamilies    int         `json:"matchedFamilies"`
+	TotalFamilies      int         `json:"totalFamilies"`
+	MatchPercent       float64     `json:"matchPercent"`
+	Excluded           bool        `json:"excluded"`
+	RecommendedExclude string      `json:"recommendedExclude,omitempty"`
 }
 
 // ActionType represents a Trimtab audit decision for a metric family.
@@ -376,22 +388,26 @@ type Tranche struct {
 
 // SafetyGateStatus captures every safety invariant check performed during analysis.
 type SafetyGateStatus struct {
-	ReportOnly            bool          `json:"reportOnly"`
-	Blocked               bool          `json:"blocked"`
-	BlockReasons          []string      `json:"blockReasons,omitempty"`
-	Warnings              []string      `json:"warnings,omitempty"`
-	QueryLogConfigured    bool          `json:"queryLogConfigured"`
-	QueryLogCoveredDays   float64       `json:"queryLogCoveredDays"`
-	RequiredWindowDays    float64       `json:"requiredWindowDays"`
-	APIUserQueries        int           `json:"apiUserQueries"`
-	RuleEvalQueries       int           `json:"ruleEvalQueries"`
-	ExcludedQueries       int           `json:"excludedQueries"`
-	BaselineDriftDetected bool          `json:"baselineDriftDetected"`
-	BaselineDriftDetails  []string      `json:"baselineDriftDetails,omitempty"`
-	SanityCeilingTripped  bool          `json:"sanityCeilingTripped"`
-	SoakBlocked           bool          `json:"soakBlocked"`
-	SoakRemaining         time.Duration `json:"soakRemaining,omitempty"`
-	UnresolvedRegrets     int           `json:"unresolvedRegrets"`
+	ReportOnly               bool          `json:"reportOnly"`
+	Blocked                  bool          `json:"blocked"`
+	BlockReasons             []string      `json:"blockReasons,omitempty"`
+	Warnings                 []string      `json:"warnings,omitempty"`
+	QueryLogConfigured       bool          `json:"queryLogConfigured"`
+	QueryLogCoveredDays      float64       `json:"queryLogCoveredDays"`
+	RequiredWindowDays       float64       `json:"requiredWindowDays"`
+	APIUserQueries           int           `json:"apiUserQueries"`
+	RuleEvalQueries          int           `json:"ruleEvalQueries"`
+	ExcludedQueries          int           `json:"excludedQueries"`
+	BaselineDriftDetected    bool          `json:"baselineDriftDetected"`
+	BaselineDriftDetails     []string      `json:"baselineDriftDetails,omitempty"`
+	SanityCeilingTripped     bool          `json:"sanityCeilingTripped"`
+	SoakBlocked              bool          `json:"soakBlocked"`
+	SoakRemaining            time.Duration `json:"soakRemaining,omitempty"`
+	UnresolvedRegrets        int           `json:"unresolvedRegrets"`
+	PendingConfirmation      bool          `json:"pendingConfirmation,omitempty"`
+	PendingConfirmationSince time.Time     `json:"pendingConfirmationSince,omitempty"`
+	ActiveTrancheStatus      string        `json:"activeTrancheStatus,omitempty"`
+	NextTrancheReady         bool          `json:"nextTrancheReady,omitempty"`
 }
 
 // AuditSummary holds top-level numbers for the CLI header and JSON output.

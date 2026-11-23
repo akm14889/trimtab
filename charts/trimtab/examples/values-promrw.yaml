@@ -1,0 +1,23 @@
+# Prometheus `remote_write` `write_relabel_configs` override.
+
+envFrom:
+  - secretRef:
+      name: trimtab-credentials
+
+config:
+  name: trimtab-promrw
+  inventory:
+    prometheusURL: http://prometheus.monitoring.svc:9090
+  usage:
+    grafana:
+      url: http://grafana.monitoring.svc:80
+      auth:
+        bearerTokenEnv: GRAFANA_API_KEY
+  synthesizer:
+    target: promrw
+    outputPath: /var/lib/trimtab/trimtab-remote-write.yaml
+    alloy: null
+    promRW:
+      mode: relabel_configs
+      remoteWriteURL: https://remote-write.monitoring.svc/api/v1/write
+      maxTermsPerRule: 250

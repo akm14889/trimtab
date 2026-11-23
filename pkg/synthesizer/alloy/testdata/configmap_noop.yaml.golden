@@ -1,0 +1,25 @@
+# Managed by Trimtab — DO NOT EDIT MANUALLY
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trimtab-alloy-rules
+  labels:
+    app.kubernetes.io/managed-by: trimtab
+data:
+  trimtab.alloy: |
+    // Managed by Trimtab — DO NOT EDIT MANUALLY
+    // Audit: 2026-11-21 | Coverage: 3/30d | Mode: PASS-THROUGH (0 drops synthesized) | Regrets: 0
+    declare "drop_unused" {
+      argument "forward_to" {
+        optional = false
+      }
+      export "receiver" {
+        value = prometheus.relabel.trimtab_drop.receiver
+      }
+
+      prometheus.relabel "trimtab_drop" {
+        forward_to = argument.forward_to.value
+
+        // No active drop rules (valid pass-through).
+      }
+    }
