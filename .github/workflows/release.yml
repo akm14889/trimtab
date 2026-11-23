@@ -10,6 +10,17 @@ on:
         description: "Semver tag created by release-please (e.g. v0.1.0)"
         required: true
         type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing semver tag to release (e.g. v0.0.1-beta.1)"
+        required: true
+        type: string
+      push_attestation_to_registry:
+        description: "Also push OCI provenance attestation referrer (sha256-...) to GHCR"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -100,6 +111,7 @@ jobs:
         run: |
           TAG="${INPUT_TAG:-${GITHUB_REF_NAME}}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "name=ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
@@ -140,7 +152,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.image.outputs.tag }}
-            COMMIT=${{ github.sha }}
+            COMMIT=${{ steps.image.outputs.commit }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -149,4 +161,4 @@ jobs:
         with:
           subject-name: ${{ steps.image.outputs.name }}
           subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
+          push-to-registry: ${{ inputs.push_attestation_to_registry == true }}
