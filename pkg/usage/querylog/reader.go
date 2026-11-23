@@ -168,7 +168,7 @@ func readQueryLogFile(path, format string, matcher *excludeMatcher, cache map[st
 	if err != nil {
 		return fmt.Errorf("open query log %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var r io.Reader = f
 	if strings.HasSuffix(strings.ToLower(path), ".gz") {
@@ -176,7 +176,7 @@ func readQueryLogFile(path, format string, matcher *excludeMatcher, cache map[st
 		if err != nil {
 			return fmt.Errorf("gunzip query log %s: %w", path, err)
 		}
-		defer gz.Close()
+		defer func() { _ = gz.Close() }()
 		r = gz
 	}
 

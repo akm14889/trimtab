@@ -1,6 +1,6 @@
 module trimtab.io/trimtab
 
-go 1.27.3
+go 1.27
 
 require (
 	github.com/prometheus/common v0.72.1

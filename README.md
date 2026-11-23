@@ -26,6 +26,7 @@ Run Trimtab against the bundled offline fixture dataset (`examples/demo/`)—no 
 ```bash
 # Build, run all unit/safety/golden tests with -race, and run the Alloy demo
 make verify
+make lint
 make demo
 
 # Try the OpenTelemetry Collector target (Phase 1.1)
@@ -120,6 +121,6 @@ See [examples/demo/prometheus-remote-write.yaml.example](examples/demo/prometheu
 
 - [docs/LOCAL_DEV.md](docs/LOCAL_DEV.md) — Local development & Kind/Tilt Kubernetes setup (including NixOS prerequisites)
 - [docs/DESIGN.md](docs/DESIGN.md) — Full architecture, rationale, invariants, and phased roadmap
-- [docs/PLAN.md](docs/PLAN.md) — Living iterative implementation plan across all phases (P2.2–P3.5)
+- [docs/PLAN.md](docs/PLAN.md) — Living iterative implementation plan across all phases (P2.1b–P3.5)
 - [AGENT.md](AGENT.md) — High-signal guide & safety invariants for engineering/agent sessions
 - [docs/CHECKPOINT.md](docs/CHECKPOINT.md) — Living progress checkpoint & session handoff tracker

@@ -8,10 +8,10 @@
 
 ## Current Status
 
-- **Completed Phases:** **Phase 1 (Metrics CLI MVP + Grafana Alloy)**, **Phase 1.1 (OpenTelemetry Collector Synthesizer + Loki Query-Log Source)**, AND **Phase 2.1 (Prometheus `remote_write` Synthesizer)**
-- **Overall State:** Verified & Green — ready to execute **Phase 2.1a (GitHub PR CI, Release Pipeline & Toolchain Hygiene)**, followed by **P2.1b**, **P2.1c**, and **P2.2** (see [docs/PLAN.md](PLAN.md))
+- **Completed Phases:** **Phase 1 (Metrics CLI MVP + Grafana Alloy)**, **Phase 1.1 (OpenTelemetry Collector Synthesizer + Loki Query-Log Source)**, **Phase 2.1 (Prometheus `remote_write` Synthesizer)**, AND **Phase 2.1a (GitHub PR CI, Release Pipeline & Toolchain Hygiene)**
+- **Overall State:** Verified & Green — ready to execute **Phase 2.1b (Safety-Critical Hardening)**, followed by **P2.1c** and **P2.2** (see [docs/PLAN.md](PLAN.md))
 - **Last Updated:** 2026-11-23
-- **Go Toolchain:** Go `1.27.3` (`module trimtab.io/trimtab`)
+- **Go Toolchain:** `go 1.27` in `go.mod` (`module trimtab.io/trimtab`, built/verified with Go `1.27.3`)
 - **Verification Command:** `go test -race ./... && go build ./cmd/trimtab`
 - **Demo Commands:** `make demo` (Alloy) | `make demo-otel` (OTel Collector) | `make demo-promrw` (Prometheus `remote_write`) | `make demo-markdown`
 
@@ -29,7 +29,7 @@
 ### Phase 2 Milestone Checklist (See [docs/PLAN.md](PLAN.md))
 
 - [x] **P2.1 — Prometheus `remote_write` Synthesizer (`pkg/synthesizer/promrw/`):** Shared relabel helper (`pkg/synthesizer/relabel.go`), `relabel_configs` / `remote_write` / `prometheus_operator_patch` modes, real `prometheus/model/relabel` validation + execution tests, golden tests, CLI/demo wiring (`make demo-promrw`).
-- [ ] **P2.1a — GitHub PR CI, Release Pipeline & Toolchain Hygiene:** `go 1.27` in `go.mod`, PR CI (`.github/workflows/ci.yml` + `.golangci.yml` running `go test -race`, `golangci-lint`, golden tests, `make demo*`, Docker build check), and tag-triggered release pipeline (`.github/workflows/release.yml` + `.goreleaser.yaml` + multi-arch `Dockerfile` publishing static binaries, checksums, SPDX SBOM, GHCR images, and build provenance attestations).
+- [x] **P2.1a — GitHub PR CI, Release Pipeline & Toolchain Hygiene:** `go 1.27` in `go.mod`, PR CI (`.github/workflows/ci.yml` + `.golangci.yml` + `make lint` running `go test -race`, `golangci-lint`, golden tests, `make demo*`, Docker build check, and rolling `main`/`sha-<short>` GHCR dev images), automated `release-please` version tagging & `CHANGELOG.md` (`.github/workflows/release-please.yml`, `release-please-config.json`, `.release-please-manifest.json`), and release pipeline (`.github/workflows/release.yml` via `workflow_call` + `v*.*.*` tags, `.goreleaser.yaml` with `mode: keep-existing`, multi-arch `Dockerfile` with `VERSION`/`COMMIT` ldflags injection publishing static binaries, checksums, SPDX SBOM, GHCR images, and build provenance attestations).
 - [ ] **P2.1b — Safety-Critical Hardening:** Log-rotation `LastQueriedAt`/`LastBucketQueriedAt` survival + trailing-window `CoveredDates` bitmap, observation-only `analyze` + explicit `synth --activate` + confirmed soak (`pending_confirmation -> soaking`), per-expression query-log wildcard detection, PromQL scalar binary label precision, HWM baselines + daily query-log rate, Safety Matrix #11–#13.
 - [ ] **P2.1c — Unified Backend Auth (`pkg/httpclient`), Live-Scale Hardening & `trimtab doctor`:** Lean stdlib `HTTPAuthConfig` (No Auth, Basic Auth, Bearer, Custom Header Auth `*Env`/`*File`, `X-Scope-OrgID`, TLS/mTLS, secret redaction, `User-Agent: trimtab/` self-query auto-exclusion), `/status/tsdb?limit` + `selector`, Loki forward pagination + `param_query` + streaming dedup, Grafana non-Prometheus datasource filter + `/api/search` pagination, Alloy `module|relabel_rules|configmap` modes, `deploy/k8s/` CronJob, `trimtab doctor`.
 - [ ] **P2.2 — Critical Infrastructure & Ruler Usage Sources:** Mimir/Thanos Ruler APIs + KEDA, `prometheus-adapter`, Argo Rollouts, Flagger scanners.
@@ -80,6 +80,7 @@ All 10 invariants live in [pkg/engine/safety_matrix_test.go](../pkg/engine/safet
 | `pkg/synthesizer/promrw/` | Done | `promrw_test.go` + 5 golden files + `model/relabel` execution tests |
 | `pkg/report/` | Done | `report_test.go` (`table`, `markdown`, `json`) |
 | `examples/demo/` | Done | Offline 391k-series demo + Alloy, OTel & Prometheus `remote_write` configs |
+| `.github/workflows/`, `.golangci.yml`, `.goreleaser.yaml`, `release-please-config.json`, `.release-please-manifest.json`, `Dockerfile` | Done | `golangci-lint` (0 issues), `goreleaser check` + snapshot build, `release-please` + rolling `main` GHCR config, Docker Buildx smoke & arm64 cross-compile |
 
 ---
 
@@ -100,8 +101,7 @@ All 10 invariants live in [pkg/engine/safety_matrix_test.go](../pkg/engine/safet
    go test -race ./... && go build ./cmd/trimtab
    make demo && make demo-otel && make demo-promrw
    ```
-3. **Next Build Target — Phase 2.1a** (full specifications for all upcoming phases live in [docs/PLAN.md](PLAN.md); refine/append there rather than creating separate phase plan files, and update this checkpoint after each item):
-   - **P2.1a — GitHub PR CI, Release Pipeline & Toolchain Hygiene:** `go 1.27` in `go.mod`, `.github/workflows/ci.yml` + `.golangci.yml`, and `.github/workflows/release.yml` + `.goreleaser.yaml` + multi-arch `Dockerfile` (static binaries, checksums, SBOM, GHCR images, provenance attestations).
+3. **Next Build Target — Phase 2.1b** (full specifications for all upcoming phases live in [docs/PLAN.md](PLAN.md); refine/append there rather than creating separate phase plan files, and update this checkpoint after each item):
    - **P2.1b — Safety-Critical Hardening:** Log-rotation survival & trailing `CoveredDates` bitmap, observation-only `analyze` + explicit `synth --activate` + confirmed soak, per-expression query-log wildcards, PromQL scalar binary precision, HWM baselines, Safety Matrix #11–#13.
    - **P2.1c — Unified Backend Auth (`pkg/httpclient`), Live-Scale Hardening & `trimtab doctor`:** Reusable Basic/Bearer/Custom-Header/TLS auth, `User-Agent: trimtab/` auto-exclusion, `/status/tsdb?limit` + `selector`, Loki pagination + `param_query` + streaming dedup, Grafana datasource filtering + search pagination, Alloy output modes, `trimtab doctor`.
    - **P2.2 — Critical Infrastructure & Ruler Usage Sources (`pkg/usage/ruler/`, `pkg/usage/k8sconsumers/`):** Mimir/Thanos Ruler API, KEDA `ScaledObject`/`ScaledJob`, `prometheus-adapter`, Argo Rollouts `AnalysisTemplate`, Flagger `MetricTemplate`/`Canary` (extending `BaselineCounts` in `pkg/state`).

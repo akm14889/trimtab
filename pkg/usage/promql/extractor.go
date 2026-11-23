@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
 )
@@ -309,7 +310,7 @@ func extractVectorSelector(n *parser.VectorSelector, ctx evalContext, res *Extra
 	}
 
 	for _, m := range n.LabelMatchers {
-		if m.Name == labels.MetricName {
+		if m.Name == model.MetricNameLabel {
 			switch m.Type {
 			case labels.MatchEqual:
 				metricName = m.Value

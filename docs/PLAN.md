@@ -24,8 +24,8 @@
 | **Phase 1** | **P1.0** | Metrics CLI MVP + Grafana Alloy Synthesizer | `cmd/trimtab/`, `pkg/config/`, `pkg/metrics/`, `pkg/state/`, `pkg/inventory/prometheus/`, `pkg/usage/*`, `pkg/engine/`, `pkg/synthesizer/alloy/`, `pkg/report/` | `[x]` Completed |
 | **Phase 1.1** | **P1.1** | OTel Collector Synthesizer + Loki Query-Log Source | `pkg/synthesizer/otel/`, `pkg/usage/querylog/loki.go` | `[x]` Completed |
 | **Phase 2** | **P2.1** | Prometheus `remote_write` Synthesizer | `pkg/synthesizer/relabel.go`, `pkg/synthesizer/promrw/` | `[x]` Completed |
-| **Phase 2** | **P2.1a** | GitHub PR CI, Release Pipeline & Toolchain Hygiene | `.github/workflows/`, `.goreleaser.yaml`, `.golangci.yml`, `go.mod`, `Dockerfile` | `[ ]` Next |
-| **Phase 2** | **P2.1b** | Safety-Critical Hardening | `pkg/state/`, `pkg/engine/`, `pkg/usage/querylog/`, `pkg/usage/promql/`, `cmd/trimtab/` | `[ ]` Planned |
+| **Phase 2** | **P2.1a** | GitHub PR CI, Release Pipeline & Toolchain Hygiene | `.github/workflows/`, `.goreleaser.yaml`, `.golangci.yml`, `go.mod`, `Dockerfile` | `[x]` Completed |
+| **Phase 2** | **P2.1b** | Safety-Critical Hardening | `pkg/state/`, `pkg/engine/`, `pkg/usage/querylog/`, `pkg/usage/promql/`, `cmd/trimtab/` | `[ ]` Next |
 | **Phase 2** | **P2.1c** | Unified Backend Auth, Live-Scale Hardening & `trimtab doctor` | `pkg/httpclient/`, `pkg/config/`, `pkg/inventory/prometheus/`, `pkg/usage/querylog/`, `pkg/usage/grafana/`, `pkg/synthesizer/alloy/`, `deploy/k8s/` | `[ ]` Planned |
 | **Phase 2** | **P2.2** | Critical Infrastructure & Ruler Usage Sources | `pkg/usage/ruler/`, `pkg/usage/k8sconsumers/` | `[ ]` Planned |
 | **Phase 2** | **P2.3** | Observability Ecosystem Static Consumers | `pkg/usage/alertmanager/`, `pkg/usage/perses/`, `pkg/usage/slo/` | `[ ]` Planned |
@@ -136,7 +136,7 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 ---
 
-### P2.1a — GitHub PR CI, Release Pipeline & Toolchain Hygiene *(Next Build Target)*
+### P2.1a — GitHub PR CI, Release Pipeline & Toolchain Hygiene *(Completed)*
 
 - **Goal:** Establish automated PR quality gates and reproducible GitHub Releases + multi-arch container image publishing first, so every subsequent Phase 2 PR (starting with `P2.1b`) is CI-verified and any tagged build can be pulled directly into Kubernetes clusters.
 - **Scope & Deliverables:**
@@ -144,11 +144,11 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
      - Change `go 1.27.3` to `go 1.27` without pinning a patch `toolchain` directive so contributors on any `1.27.x` or newer toolchain build locally without forced downloads.
   2. **PR & Main Branch CI (`.github/workflows/ci.yml`, `.golangci.yml`):**
      - Triggered on `pull_request` and `push` to `main` (with concurrency cancel-in-progress).
-     - Runs `go test -count=1 -race ./...`, `golangci-lint` (lean `.golangci.yml` ruleset), `go build ./cmd/trimtab`, golden test verification, offline demo smoke suite (`make demo && make demo-otel && make demo-promrw`), and a non-pushing container build check (`docker buildx build`) so `Dockerfile` stays green on every PR.
-  3. **Tag-Triggered Release CI (`.github/workflows/release.yml`, `.goreleaser.yaml`, `Dockerfile`):**
-     - Triggered on semver tags (`v*.*.*`, supporting pre-releases such as `v0.2.0-rc.1`).
+     - Runs `go test -count=1 -race ./...`, `golangci-lint` (lean `.golangci.yml` ruleset), `go build ./cmd/trimtab`, golden test verification, offline demo smoke suite (`make demo && make demo-otel && make demo-promrw`), and a container build + smoke check (`docker buildx build`), plus publishes rolling multi-arch `main` and `sha-<short>` dev images to GHCR with build provenance attestations on `push` to `main`.
+  3. **Automated Version Tagging & Release CI (`.github/workflows/release-please.yml`, `release-please-config.json`, `.release-please-manifest.json`, `.github/workflows/release.yml`, `.goreleaser.yaml`, `Dockerfile`):**
+     - `release-please` maintains a Release PR + `CHANGELOG.md` from Conventional Commits on `main`, auto-tags `vX.Y.Z` on merge, and invokes `release.yml` via `workflow_call` (manual `v*.*.*` tag pushes also trigger `release.yml`).
      - Runs the full `go test -count=1 -race ./...` pre-release gate before publishing any artifacts.
-     - Cross-compiles reproducible `CGO_ENABLED=0` static binaries (`-trimpath -ldflags="-s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}"`, matching existing `version`/`commit` variables in `cmd/trimtab/main.go`) for `linux` and `darwin` (`amd64`, `arm64`), publishing archives, `checksums.txt`, SPDX SBOM, and auto-generated release notes to GitHub Releases.
+     - Cross-compiles reproducible `CGO_ENABLED=0` static binaries (`-trimpath -ldflags="-s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}"`, matching existing `version`/`commit` variables in `cmd/trimtab/main.go`) for `linux` and `darwin` (`amd64`, `arm64`), uploading archives, `checksums.txt`, and SPDX SBOM to the GitHub Release (`mode: keep-existing` preserves `release-please` notes when present).
      - Updates `Dockerfile` with `ARG TARGETARCH`, `ARG VERSION=dev`, `ARG COMMIT=local` (setting `GOARCH=${TARGETARCH}` and `-ldflags` version/commit injection) and publishes multi-arch (`linux/amd64`, `linux/arm64`) OCI images to GHCR (`ghcr.io/<owner>/trimtab:<tag>`, plus `:latest` on stable non-prerelease tags) using `GITHUB_TOKEN` (`packages: write`, `contents: write`, `id-token: write`, `attestations: write`).
      - Emits GitHub build provenance attestations (`actions/attest-build-provenance`) for both release archives and OCI container images.
 - **Verification & Exit Criteria:**
@@ -158,7 +158,7 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 ---
 
-### P2.1b — Safety-Critical Hardening *(Planned)*
+### P2.1b — Safety-Critical Hardening *(Next Build Target)*
 
 - **Goal:** Eliminate three safety-critical production bugs (usage evidence lost on log rotation, `analyze` silently activating tranches, and caller-grouped wildcard detection flagging shared dashboard servers), restore PromQL label precision on scalar binary comparisons, and prevent gradual baseline bleed-down before building new Phase 2 consumers.
 - **Scope & Exact Changes:**
