@@ -1,6 +1,10 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "release-type": "go",
+  "initial-version": "0.0.1-beta.1",
+  "versioning": "prerelease",
+  "prerelease": true,
+  "prerelease-type": "beta.1",
   "include-v-in-tag": true,
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": true,
