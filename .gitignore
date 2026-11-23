@@ -2,6 +2,7 @@
 /bin/
 /trimtab
 /out/
+/dist/
 
 # Go build/test artifacts
 *.test

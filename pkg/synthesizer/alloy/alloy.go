@@ -49,17 +49,17 @@ func (s *Synthesizer) Synthesize(report *metrics.AuditReport) (*synthesizer.Gene
 	var b strings.Builder
 	b.WriteString("// Managed by Trimtab — DO NOT EDIT MANUALLY\n")
 	if report.Safety.ReportOnly || report.Safety.Blocked {
-		b.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&b,
 			"// Audit: %s | Coverage: %.0f/%.0fd | Mode: PASS-THROUGH (0 drops synthesized) | Regrets: %d\n",
 			auditDate, report.Safety.QueryLogCoveredDays, report.Safety.RequiredWindowDays, len(report.Regrets),
-		))
+		)
 	} else {
-		b.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&b,
 			"// Audit: %s | Coverage: %.0f/%.0fd | Tranche %d of %d (%.1f%% series) | Regrets: %d\n",
 			auditDate, report.Safety.QueryLogCoveredDays, report.Safety.RequiredWindowDays,
 			report.Summary.ActiveTranche, report.Summary.TotalTranches,
 			report.Summary.SynthesizedPercent, len(report.Regrets),
-		))
+		)
 	}
 
 	b.WriteString("declare \"drop_unused\" {\n")
@@ -79,7 +79,7 @@ func (s *Synthesizer) Synthesize(report *metrics.AuditReport) (*synthesizer.Gene
 		for _, chunk := range chunks {
 			b.WriteString("    rule {\n")
 			b.WriteString("      source_labels = [\"__name__\"]\n")
-			b.WriteString(fmt.Sprintf("      regex         = %q\n", chunk))
+			fmt.Fprintf(&b, "      regex         = %q\n", chunk)
 			b.WriteString("      action        = \"drop\"\n")
 			b.WriteString("    }\n")
 		}

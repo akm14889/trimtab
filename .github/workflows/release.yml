@@ -1,0 +1,152 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Semver tag created by release-please (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Pre-Release Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run race tests, build & offline demos
+        run: |
+          go test -count=1 -race ./...
+          make verify
+          make demo
+          make demo-otel
+          make demo-promrw
+
+  release-binaries:
+    name: Release Binaries & SBOM
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest Release Archives & Checksums
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+
+  release-image:
+    name: Release Multi-Arch OCI Image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Resolve image name and release tag
+        id: image
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "name=ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        env:
+          GITHUB_REF: refs/tags/${{ steps.image.outputs.tag }}
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=semver,pattern={{raw}},value=${{ steps.image.outputs.tag }}
+            type=semver,pattern={{version}},value=${{ steps.image.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.image.outputs.tag }}
+
+      - name: Build and push multi-arch OCI image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.image.outputs.tag }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Attest OCI Image Provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

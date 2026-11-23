@@ -1,5 +1,7 @@
 .git/
 bin/
+/trimtab
+dist/
 out/
 examples/demo/out/
 examples/demo/.trimtab-state.json

@@ -1,0 +1,48 @@
+# Requires repository setting:
+# Settings -> Actions -> General -> Workflow permissions -> Allow GitHub Actions to create and approve pull requests.
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: Update Release PR / Cut Release Tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-release:
+    name: Publish Release Binaries & OCI Image
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit

@@ -96,17 +96,17 @@ func (s *Synthesizer) Synthesize(report *metrics.AuditReport) (*synthesizer.Gene
 	b.WriteString("# Managed by Trimtab — DO NOT EDIT MANUALLY\n")
 	b.WriteString("# Never defines `service:` so user pipeline lists are never overwritten.\n")
 	if report.Safety.ReportOnly || report.Safety.Blocked {
-		b.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&b,
 			"# Audit: %s | Coverage: %.0f/%.0fd | Mode: NO-OP (0 drops synthesized) | Regrets: %d\n",
 			auditDate, report.Safety.QueryLogCoveredDays, report.Safety.RequiredWindowDays, len(report.Regrets),
-		))
+		)
 	} else {
-		b.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&b,
 			"# Audit: %s | Coverage: %.0f/%.0fd | Tranche %d of %d (%.1f%% series) | Regrets: %d\n",
 			auditDate, report.Safety.QueryLogCoveredDays, report.Safety.RequiredWindowDays,
 			report.Summary.ActiveTranche, report.Summary.TotalTranches,
 			report.Summary.SynthesizedPercent, len(report.Regrets),
-		))
+		)
 	}
 
 	b.WriteString("processors:\n")
@@ -120,14 +120,14 @@ func (s *Synthesizer) Synthesize(report *metrics.AuditReport) (*synthesizer.Gene
 		b.WriteString("        - 'name == \"__trimtab_noop__\"'\n")
 	} else {
 		for _, v := range verified {
-			b.WriteString(fmt.Sprintf(
+			fmt.Fprintf(&b,
 				"        # %s | %d series | Tranche %d of %d\n",
 				v.rec.Reason, v.rec.Series,
 				report.Summary.ActiveTranche, report.Summary.TotalTranches,
-			))
+			)
 			escaped := strings.ReplaceAll(v.otlpName, `\`, `\\`)
 			escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-			b.WriteString(fmt.Sprintf("        - 'name == \"%s\"'\n", escaped))
+			fmt.Fprintf(&b, "        - 'name == \"%s\"'\n", escaped)
 		}
 	}
 

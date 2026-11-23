@@ -3,7 +3,6 @@ package querylog
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -95,7 +94,7 @@ func TestLokiQueryLogSource(t *testing.T) {
 						"stream": map[string]string{"job": "prometheus"},
 						"values": [][2]string{
 							{strconv.FormatInt(t0.UnixNano(), 10), `{"params":{"query":"rate(loki_api_metric[5m])"},"httpRequest":{"clientIP":"10.0.0.1"},"ts":"2026-11-20T10:00:00Z"}`},
-							{strconv.FormatInt(t1.UnixNano(), 10), fmt.Sprintf(`level=info caller=grafana query="sum by (service) (mimir_frontend_metric)"`)},
+							{strconv.FormatInt(t1.UnixNano(), 10), `level=info caller=grafana query="sum by (service) (mimir_frontend_metric)"`},
 						},
 					},
 				},

@@ -1,13 +1,16 @@
 BINARY := bin/trimtab
 DEMO_NOW := 2026-11-21T12:00:00Z
 
-.PHONY: build test verify demo demo-otel demo-promrw demo-markdown clean kind-up kind-down kind-smoke tilt-up
+.PHONY: build test lint verify demo demo-otel demo-promrw demo-markdown clean kind-up kind-down kind-smoke tilt-up
 
 build:
 	go build -o $(BINARY) ./cmd/trimtab
 
 test:
 	go test -race ./...
+
+lint:
+	golangci-lint run ./...
 
 verify:
 	go test -race ./... && go build ./cmd/trimtab
@@ -37,4 +40,4 @@ tilt-up:
 	tilt up
 
 clean:
-	rm -rf bin/ trimtab out/ examples/demo/out/ examples/demo/.trimtab-state*.json
+	rm -rf bin/ trimtab out/ dist/ examples/demo/out/ examples/demo/.trimtab-state*.json

@@ -169,7 +169,7 @@ func scanHTTP(ctx context.Context, cfg *config.GrafanaConfig, res *ScanResult) e
 		if err != nil {
 			return nil, fmt.Errorf("grafana GET %s: %w", endpoint, err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, fmt.Errorf("grafana read %s: %w", endpoint, err)
