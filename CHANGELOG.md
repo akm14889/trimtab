@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.1-beta.2](https://github.com/akm14889/trimtab/compare/v0.0.1-beta.1...v0.0.1-beta.2) (2026-11-23)
+
+
+### CI & Build
+
+* add manual release dispatch and gate attestation registry push ([#8](https://github.com/akm14889/trimtab/issues/8)) ([8d8422b](https://github.com/akm14889/trimtab/commit/8d8422b786f10162b3d5d7238952f87093d4bd09))
+
 ## 0.0.1-beta.1 (2026-11-23)
 
 
