@@ -263,7 +263,7 @@ type FamilyMatch struct {
 }
 
 func (cat *FamilyCatalog) MatchExactName(metricName string) []FamilyMatch {
-	if metricName == "" {
+	if cat == nil || metricName == "" {
 		return nil
 	}
 	if fam, ok := cat.MemberToFamily[metricName]; ok {
@@ -290,7 +290,7 @@ func (cat *FamilyCatalog) MatchExactName(metricName string) []FamilyMatch {
 }
 
 func (cat *FamilyCatalog) MatchRegex(pattern string) []FamilyMatch {
-	if pattern == "" {
+	if cat == nil || pattern == "" {
 		return nil
 	}
 	// Prometheus regex matchers are implicitly anchored: ^(?:pattern)$

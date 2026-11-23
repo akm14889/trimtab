@@ -7,7 +7,7 @@
 
 ## What Trimtab Does
 
-Trimtab audits real telemetry usage across **runtime query logs** (globbed Prometheus `query_log_file`, `prom-analytics-proxy`, and Loki-shipped query logs) + **static consumers** (Grafana dashboards, Grafana-managed alert rules, Prometheus alerting & recording rules), and safely rolls out tranched drop rules behind a one-time collector insertion point:
+Trimtab audits real telemetry usage across **runtime query logs** (globbed Prometheus `query_log_file`, `prom-analytics-proxy`, and Loki-shipped query logs) + **static consumers** (Grafana dashboards & managed alerts, Prometheus YAML & Mimir/Thanos Ruler APIs, Alertmanager, Perses dashboards, Sloth/Pyrra/OpenSLO specs, KEDA, `prometheus-adapter`, Argo Rollouts, and Flagger), and safely rolls out tranched drop rules behind a one-time collector insertion point:
 
 - **Metric-family modeling** — groups classic histograms (`_bucket`/`_sum`/`_count`/`_created`) and summaries as families so series are never orphaned; recognizes native histograms separately; negotiates target synthesizer capabilities (e.g., `_bucket`-only drops on Grafana Alloy vs. advisory-only on OTel Collector).
 - **Mandatory runtime query-log gating & cold-start UX** — without query logs covering `>= minObservationWindow` (default `30d`), Trimtab stays in **Report-Only** mode showing projected savings.
@@ -44,21 +44,47 @@ make demo-markdown
 ## CLI Usage
 
 ```bash
-# Audit usage, check safety gates, print report, and write synthesized rules
+# Observation-only audit: check safety gates, run regret check, and print report (never activates drops)
 trimtab analyze --config trimtab.yaml
 
 # Export Markdown or JSON reports
 trimtab analyze --config trimtab.yaml --format markdown
 trimtab analyze --config trimtab.yaml --format json
 
-# Synthesize collector rules directly (to file or stdout with --out -)
-trimtab synth --config trimtab.yaml --target alloy  --out ./out/trimtab.alloy
-trimtab synth --config trimtab.yaml --target otel   --out ./out/trimtab-rules.yaml
-trimtab synth --config trimtab.yaml --target promrw --out ./out/trimtab-remote-write.yaml
+# Preview next eligible tranche rules without mutating State Ledger tranches
+trimtab synth --config trimtab.yaml --preview-next --out -
+
+# Explicitly activate next eligible tranche (enters pending_confirmation) and write collector rules
+trimtab synth --config trimtab.yaml --activate --target alloy  --out ./out/trimtab.alloy
+trimtab synth --config trimtab.yaml --activate --target otel   --out ./out/trimtab-rules.yaml
+trimtab synth --config trimtab.yaml --activate --target promrw --out ./out/trimtab-remote-write.yaml
+
+# Re-synthesize currently active drops (or manually confirm a pending_confirmation tranche)
+trimtab synth --config trimtab.yaml --out ./out/trimtab.alloy
+trimtab analyze --config trimtab.yaml --confirm-tranche
+
+# Verify backend connectivity, TLS, auth, tenant headers, and read-only permissions before auditing
+trimtab doctor --config trimtab.yaml
 
 # Acknowledge an intentional >20% drop in dashboard/rule counts
 trimtab analyze --config trimtab.yaml --accept-baseline-shift
 ```
+
+---
+
+## Kubernetes Quickstart (Lean Helm Chart)
+
+Deploy Trimtab in any Kubernetes cluster as a zero-CRD, read-only `CronJob` backed by a persistent State Ledger PVC and `trimtab doctor` `helm test` verification:
+
+```bash
+helm upgrade --install trimtab oci://ghcr.io/trimtab-io/charts/trimtab \
+  -n trimtab --create-namespace \
+  -f ./charts/trimtab/examples/values-prod.yaml
+
+helm test trimtab -n trimtab --logs
+```
+
+For fast non-production cluster validation (`*/15 * * * *` schedule, `1d` observation window, `15m` soak window, `probeFirstSeen: true`), use [`charts/trimtab/examples/values-nonprod.yaml`](charts/trimtab/examples/values-nonprod.yaml). See [`charts/trimtab/README.md`](charts/trimtab/README.md) for the standalone chart guide, TLS/secret setup, collector integration snippets, and full values reference.
 
 ---
 

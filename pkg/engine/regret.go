@@ -107,7 +107,11 @@ func DetectRegrets(
 				ht = &hitTracker{}
 				hits[fam] = ht
 			}
-			ht.count++
+			entryHits := entry.HitCount
+			if entryHits <= 0 {
+				entryHits = 1
+			}
+			ht.count += entryHits
 			if entry.Timestamp.After(ht.latestTS) || ht.sampleExpr == "" {
 				ht.latestTS = entry.Timestamp
 				ht.sampleExpr = entry.Query

@@ -1,0 +1,79 @@
+{{- if .Values.doctorTest.enabled -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ printf "%s-test-doctor" (include "trimtab.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "trimtab.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  serviceAccountName: {{ include "trimtab.serviceAccountName" . }}
+  automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.podSecurityContext }}
+  securityContext:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: doctor
+      image: {{ include "trimtab.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      args:
+        - doctor
+        - --config
+        - /etc/trimtab/trimtab.yaml
+        - --format
+        - {{ .Values.doctorTest.format | quote }}
+      {{- with .Values.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.env }}
+      env:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.envFrom }}
+      envFrom:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumeMounts:
+        - name: config
+          mountPath: /etc/trimtab
+          readOnly: true
+        - name: tmp-state
+          mountPath: {{ .Values.persistence.mountPath }}
+        {{- with .Values.extraVolumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.resources }}
+      resources:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumes:
+    - name: config
+      configMap:
+        name: {{ include "trimtab.fullname" . }}
+    - name: tmp-state
+      emptyDir: {}
+    {{- with .Values.extraVolumes }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.affinity }}
+  affinity:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

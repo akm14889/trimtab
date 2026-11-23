@@ -1,0 +1,31 @@
+# NON-PROD ONLY — Fast validation override for dev/staging clusters.
+# Do NOT use minObservationWindow: 1d or soakWindow: 15m in production.
+
+cronjob:
+  schedule: "*/15 * * * *"
+  reportFormat: markdown
+
+envFrom:
+  - secretRef:
+      name: trimtab-credentials
+
+config:
+  name: trimtab-nonprod
+  inventory:
+    prometheusURL: http://prometheus.monitoring.svc:9090
+    probeFirstSeen: true
+  usage:
+    grafana:
+      url: http://grafana.monitoring.svc:80
+      auth:
+        bearerTokenEnv: GRAFANA_API_KEY
+  policy:
+    minObservationWindow: 1d
+    soakWindow: 15m
+    soakStartMode: observed
+  synthesizer:
+    target: alloy
+    outputPath: /var/lib/trimtab/trimtab.alloy
+    alloy:
+      mode: module
+      maxTermsPerRule: 250

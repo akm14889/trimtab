@@ -1,0 +1,161 @@
+# Default values for Trimtab (zero-CRD read-only CronJob).
+# Override only the sections you need; see charts/trimtab/examples/ for ready-made profiles.
+
+image:
+  repository: ghcr.io/trimtab-io/trimtab
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  # Trimtab only polls HTTP APIs and does not call the Kubernetes API in the lean CronJob chart.
+  automount: false
+  annotations: {}
+  name: ""
+
+cronjob:
+  # Default every 6 hours for observation audits. Non-prod overrides commonly use "*/15 * * * *".
+  schedule: "0 */6 * * *"
+  timeZone: ""
+  concurrencyPolicy: Forbid
+  suspend: false
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: null
+  # Output format printed to CronJob container logs: table | markdown | json
+  reportFormat: markdown
+  # Set true for dry-run inspection without updating the State Ledger.
+  noStateWrite: false
+  # Additional CLI flags passed to `trimtab analyze` (for example ["--accept-baseline-shift"]).
+  extraArgs: []
+
+doctorTest:
+  # Installs a `helm test` Pod running `trimtab doctor --config /etc/trimtab/trimtab.yaml`.
+  enabled: true
+  format: json
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+  mountPath: /var/lib/trimtab
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+# Pass static env vars or Secret references (for example GRAFANA_API_KEY / PROM_TOKEN / LOKI_TOKEN).
+env: []
+envFrom: []
+# Example:
+#   - secretRef:
+#       name: trimtab-credentials
+
+# Mount optional TLS CA bundles, mTLS client certs, or fixture/local rule directories.
+extraVolumes: []
+extraVolumeMounts: []
+# Example:
+# extraVolumes:
+#   - name: backend-tls
+#     secret:
+#       secretName: trimtab-backend-tls
+# extraVolumeMounts:
+#   - name: backend-tls
+#     mountPath: /etc/trimtab/certs
+#     readOnly: true
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Trimtab application configuration rendered verbatim to /etc/trimtab/trimtab.yaml.
+# All credentials should reference env vars (*Env) or mounted files (*File) via envFrom/extraVolumes.
+config:
+  name: trimtab-audit
+  statePath: /var/lib/trimtab/.trimtab-state.json
+
+  inventory:
+    prometheusURL: http://prometheus.monitoring.svc:9090
+    tenantID: ""
+    tsdbLimit: 10000
+    probeFirstSeen: false
+    timeout: 30s
+    enableCollapseQueries: true
+    maxCollapseFamilies: 25
+    # Metrics emitted via OTel prometheus receiver keep Prometheus names by default;
+    # set "utf8_no_translation" or "explicit_otlp" (+ otlpNameMap) for OTLP-native pipelines.
+    namingMode: prometheus_receiver
+    otlpNameMap: {}
+    # Optional unified auth block:
+    # auth:
+    #   bearerTokenEnv: PROMETHEUS_BEARER_TOKEN
+    #   tls:
+    #     caFile: /etc/trimtab/certs/ca.crt
+
+  usage:
+    grafana:
+      url: http://grafana.monitoring.svc:80
+      alertAPI: provisioning
+      enableManagedAlerts: false
+      timeout: 30s
+      # auth:
+      #   bearerTokenEnv: GRAFANA_API_KEY
+    queryLogs: []
+    promRules: []
+
+  policy:
+    minObservationWindow: 30d
+    soakWindow: 7d
+    soakStartMode: observed
+    confirmationMaxRemainingPercent: 0
+    maxDropPercentPerTranche: 15
+    maxTotalDroppablePercent: 80
+    baselineDriftThresholdPercent: 20
+    queryLogBaselineDriftThresholdPercent: 50
+    wildcardThresholdPercent: 50
+    regretThreshold: 1
+    neverDrop: []
+    disableDefaultNeverDrop: false
+    excludeSources: []
+    excludeRegretCallers: []
+
+  synthesizer:
+    # Target collector format: alloy | otel | promrw
+    target: alloy
+    outputPath: /var/lib/trimtab/trimtab.alloy
+    alloy:
+      mode: module
+      maxTermsPerRule: 250

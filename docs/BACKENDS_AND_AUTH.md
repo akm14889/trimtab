@@ -66,7 +66,7 @@ Compatible with any **Prometheus HTTP API v1**-compliant metrics backend, includ
 - **Multi-tenancy:** Tenant-isolated metrics backends use the `X-Scope-OrgID` header (via static `headers` today, or first-class `inventory.tenantID` in the planned HTTP client layer).
 - **Single-cluster scoping (Planned):** Adding an optional `inventory.selector` (e.g., `cluster="staging-a"`) allows testing or auditing one cluster inside a shared multi-cluster metrics store while still checking usage globally.
 
-#### B. Ruler APIs (`Planned — Phase 2.2`, `pkg/usage/ruler/`)
+#### B. Ruler APIs (`Implemented — Phase 2.2`, `pkg/usage/ruler/`)
 Distributed rulers evaluate alerting and recording rules internally and write directly to storage, **bypassing query frontends**. As a result, ruler alerting rules do not appear in query-frontend query logs.
 
 | Backend Type | Read-Only Endpoint | Usage Semantics |
@@ -74,18 +74,20 @@ Distributed rulers evaluate alerting and recording rules internally and write di
 | **Mimir / Cortex Ruler** | `GET /prometheus/config/v1/rules` (with `X-Scope-OrgID`) | Returns multi-namespace YAML rule groups. Alerting rules become live sinks (`OriginRulerAlert`); recording rules feed `ResolveRecordingRuleDAG` only (Invariant #2). |
 | **Prometheus / Thanos Ruler** | `GET /api/v1/rules` | Returns JSON rule groups with the same alert-sink vs. recording-rule DAG separation. |
 
-- Ruler endpoints typically share the same base gateway, tenant header, and read credentials as the metrics query endpoint (requiring read permission for rules alongside metrics).
+- Ruler endpoints reuse `HTTPAuthConfig`, `tenantID` (`X-Scope-OrgID`), TLS/mTLS, and `trimtab doctor` verification.
 
 #### C. Dashboards, Alerting & Static Consumers
 - **Grafana HTTP API (`Implemented`, `pkg/usage/grafana/`):**
-  - Calls `GET /api/search?type=dash-db`, `GET /api/dashboards/uid/{uid}`, and `GET /api/v1/provisioning/alert-rules` (with planned pagination on `/api/search`, optional `/api/ruler/grafana/api/v1/rules` support, and datasource-type filtering so LogQL/TraceQL panels on multi-signal dashboards are not parsed as PromQL).
+  - Calls `GET /api/search?type=dash-db`, `GET /api/dashboards/uid/{uid}`, and `GET /api/v1/provisioning/alert-rules` (with pagination on `/api/search`, optional `/api/ruler/grafana/api/v1/rules` support, and datasource-type filtering so LogQL/TraceQL panels on multi-signal dashboards are not parsed as PromQL).
   - Also supports local dashboard JSON directories (`dashboardsDir`) and exported alert JSON (`alertRulesPath`) with zero network calls.
 - **Prometheus Rule YAML Files (`Implemented`, `pkg/usage/promrules/`):**
   - Local file/glob YAML reader scanning alerting rules, recording rules, and Go template label references (`{{ $labels.* }}`).
-- **Ecosystem & Kubernetes Static Consumers (`Planned — Phase 2.2 & 2.3`):**
-  - `pkg/usage/k8sconsumers/`: KEDA `ScaledObject`/`ScaledJob`, `prometheus-adapter`, Argo Rollouts `AnalysisTemplate`, and Flagger `MetricTemplate`/`Canary` (via Git YAML globs or in-cluster read-only RBAC).
-  - `pkg/usage/alertmanager/`: Alertmanager YAML/API (`group_by`, matchers, receiver templates) to protect alert-routing labels.
-  - `pkg/usage/perses/` & `pkg/usage/slo/`: Perses dashboard JSON/YAML/API and Sloth/Pyrra SLO specs.
+- **Kubernetes Workload Consumers (`Implemented — Phase 2.2`, `pkg/usage/k8sconsumers/`):**
+  - Multi-document YAML/JSON glob & directory scanner covering KEDA `ScaledObject`/`ScaledJob`, `prometheus-adapter`, Argo Rollouts `AnalysisTemplate`/`ClusterAnalysisTemplate`, and Flagger `MetricTemplate`/`Canary` behind a `ManifestSource` interface.
+- **Ecosystem Static Consumers (`Implemented — Phase 2.3`):**
+  - `pkg/usage/alertmanager/`: Alertmanager YAML/CRD (`ConfigPaths`) and `/api/v2/status` scanner (`group_by`, matchers, inhibit rules, receiver Go templates) protecting routing/templating labels on alerted metrics (`HTTPAuthConfig`).
+  - `pkg/usage/perses/`: Perses local dashboard JSON/YAML directories and REST API (`/api/v1/projects`, `/api/v1/projects/{project}/dashboards`) via `HTTPAuthConfig`.
+  - `pkg/usage/slo/`: Sloth, Pyrra (`ratio`/`latency`/`latencyNative`/`bool_gauge`), and OpenSLO YAML specification scanner.
 
 #### D. Runtime Query-Log Backends (`Implemented` — Mandatory for Drops per Invariant #1)
 Static consumers alone miss ad-hoc scripts, autoscalers, and external callers. Trimtab requires runtime query logs covering `>= minObservationWindow` before synthesizing any `DROP` rule:
@@ -248,7 +250,11 @@ Operators provisioning tokens for Trimtab should grant **read-only scopes only**
 | Metrics `bearerToken` + static `headers` | **Implemented** | `pkg/config`, `pkg/inventory/prometheus` |
 | Loki `tenantID` (`X-Scope-OrgID`) + `bearerToken` + static `headers` | **Implemented** | `pkg/config`, `pkg/usage/querylog/loki.go` |
 | Grafana `apiKey` (Bearer) + static `headers` | **Implemented** | `pkg/config`, `pkg/usage/grafana` |
-| Reusable `HTTPAuthConfig` (Basic Auth, `*Env`, `*File`, `headersEnv`/`File`, TLS/mTLS, `inventory.tenantID`) | **Planned** | `pkg/config`, `pkg/httpclient` |
-| `User-Agent: trimtab/...` self-query auto-exclusion + `trimtab doctor` | **Planned** | `pkg/httpclient`, `pkg/usage/querylog`, `cmd/trimtab` |
-| Mimir / Thanos / Prometheus Ruler client | **Planned (P2.2)** | `pkg/usage/ruler` |
+| Reusable `HTTPAuthConfig` (Basic Auth, `*Env`, `*File`, `headersEnv`/`File`, TLS/mTLS, `inventory.tenantID`) | **Implemented** | `pkg/config`, `pkg/httpclient` |
+| `User-Agent: trimtab/...` self-query auto-exclusion + `trimtab doctor` | **Implemented** | `pkg/httpclient`, `pkg/usage/querylog`, `cmd/trimtab` |
+| Mimir / Cortex / Thanos / Prometheus Ruler client | **Implemented (P2.2)** | `pkg/usage/ruler` |
+| KEDA / `prometheus-adapter` / Argo Rollouts / Flagger scanner | **Implemented (P2.2)** | `pkg/usage/k8sconsumers` |
+| Alertmanager routing/inhibit/template label scanner | **Implemented (P2.3)** | `pkg/usage/alertmanager` |
+| Perses local dir & REST API dashboard scanner | **Implemented (P2.3)** | `pkg/usage/perses` |
+| Sloth / Pyrra / OpenSLO specification scanner | **Implemented (P2.3)** | `pkg/usage/slo` |
 | Logs & Traces backend clients | **Planned (P3.3–P3.4)** | `pkg/logs`, `pkg/traces` |

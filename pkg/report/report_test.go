@@ -118,4 +118,37 @@ func TestRenderFormats(t *testing.T) {
 	if !strings.Contains(promRWTable, "Synthesized Prometheus remote_write rules -> ./out/trimtab-remote-write.yaml") {
 		t.Errorf("promrw table output missing Prometheus remote_write rules footer:\n%s", promRWTable)
 	}
+
+	// Observation-only next eligible tranche & pending_confirmation rendering
+	obsRep := *rep
+	obsRep.ActiveDrops = nil
+	obsRep.SynthesizedOutputPath = ""
+	obsRep.Summary.ActiveTranche = 0
+	obsRep.Summary.SynthesizedFamilies = 0
+	obsRep.Summary.SynthesizedSeries = 0
+	obsRep.Summary.SynthesizedPercent = 0
+	obsRep.Safety.NextTrancheReady = true
+	obsRep.Tranches = []metrics.Tranche{{
+		Number: 1,
+		Series: 57868,
+		Items:  rep.ActiveDrops,
+	}}
+	obsTable, err := Render(&obsRep, FormatTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(obsTable, "NEXT ELIGIBLE TRANCHE (Tranche 1/4") || !strings.Contains(obsTable, "trimtab synth --activate") {
+		t.Errorf("expected observation-only next eligible tranche guidance:\n%s", obsTable)
+	}
+
+	pendingRep := *rep
+	pendingRep.Safety.PendingConfirmation = true
+	pendingRep.Safety.ActiveTrancheStatus = "pending_confirmation"
+	pendingTable, err := Render(&pendingRep, FormatTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(pendingTable, "[pending_confirmation]") || !strings.Contains(pendingTable, "awaiting confirmation") {
+		t.Errorf("expected pending_confirmation status & footer:\n%s", pendingTable)
+	}
 }

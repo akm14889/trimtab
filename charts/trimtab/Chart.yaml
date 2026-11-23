@@ -1,0 +1,19 @@
+apiVersion: v2
+name: trimtab
+description: Lean zero-CRD CronJob Helm chart for Trimtab, an observation-first adaptive telemetry control plane.
+type: application
+version: 0.1.0
+appVersion: "v0.0.1-beta.2"
+home: https://trimtab.io
+sources:
+  - https://github.com/trimtab-io/trimtab
+keywords:
+  - telemetry
+  - prometheus
+  - opentelemetry
+  - grafana-alloy
+  - cardinality
+  - observability
+maintainers:
+  - name: Trimtab Maintainers
+    url: https://trimtab.io

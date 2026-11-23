@@ -83,9 +83,29 @@ jobs:
           echo "$version_out" | grep -q "ci"
           docker run --rm trimtab:ci analyze --config /workspace/examples/demo/trimtab.yaml --now 2026-11-21T12:00:00Z --no-state-write >/dev/null
 
+  helm:
+    name: Helm Chart Lint & Template
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint and template Helm chart
+        run: |
+          helm lint charts/trimtab
+          helm template trimtab charts/trimtab >/dev/null
+          for f in charts/trimtab/examples/values-*.yaml; do
+            echo "Checking $f"
+            helm lint charts/trimtab -f "$f"
+            helm template trimtab charts/trimtab -f "$f" >/dev/null
+          done
+
   publish-main-image:
     name: Publish Main Dev Image
-    needs: [test, lint, docker]
+    needs: [test, lint, helm, docker]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

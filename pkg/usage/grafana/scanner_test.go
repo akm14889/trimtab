@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"trimtab.io/trimtab/pkg/config"
@@ -117,5 +118,90 @@ func TestScanLocalDir(t *testing.T) {
 	}
 	if res.DashboardCount != 1 || len(res.Refs) != 1 || !res.Refs[0].IsRegex {
 		t.Fatalf("unexpected local scan result: %+v", res)
+	}
+}
+
+func TestGrafanaPaginationDatasourceFilterAndRulerAlerts(t *testing.T) {
+	origPageSize := searchPageSize
+	searchPageSize = 2
+	defer func() { searchPageSize = origPageSize }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/search":
+			switch r.URL.Query().Get("page") {
+			case "1":
+				_, _ = w.Write([]byte(`[{"uid":"d1","title":"D1"},{"uid":"d2","title":"D2"}]`))
+			case "2":
+				_, _ = w.Write([]byte(`[{"uid":"d3","title":"D3"}]`))
+			default:
+				_, _ = w.Write([]byte(`[]`))
+			}
+		case "/api/dashboards/uid/d1":
+			// Mixed dashboard: Prometheus panel + Loki LogQL panel + Tempo TraceQL panel
+			_, _ = w.Write([]byte(`{
+				"dashboard": {
+					"uid": "d1", "title": "Multi-Signal",
+					"templating": {"list": [
+						{"name": "streams", "datasource": {"type": "loki"}, "query": "label_values({job=\"app\"}, pod)"},
+						{"name": "svc", "datasource": {"type": "prometheus"}, "query": "label_values(prom_var_metric, service)"}
+					]},
+					"panels": [
+						{"title": "Logs", "datasource": {"type": "loki"}, "targets": [{"expr": "sum(rate({app=\"api\"} |= \"error\" [5m]))"}]},
+						{"title": "Traces", "datasource": {"type": "tempo"}, "targets": [{"expr": "{ resource.service.name = \"api\" }"}]},
+						{"title": "Prom", "datasource": {"type": "prometheus"}, "targets": [{"expr": "rate(prom_panel_metric[5m])"}]}
+					]
+				}
+			}`))
+		case "/api/dashboards/uid/d2", "/api/dashboards/uid/d3":
+			_, _ = w.Write([]byte(`{"dashboard": {"uid": "` + strings.TrimPrefix(r.URL.Path, "/api/dashboards/uid/") + `", "title": "Simple", "panels": []}}`))
+		case "/api/ruler/grafana/api/v1/rules":
+			_, _ = w.Write([]byte(`{
+				"Payments": [
+					{
+						"name": "slo-alerts",
+						"rules": [
+							{
+								"annotations": {"summary": "Err on {{ $labels.cluster }}"},
+								"grafana_alert": {
+									"uid": "ruler-a1",
+									"title": "Ruler High Errors",
+									"data": [
+										{"refId": "A", "datasourceUid": "prom-uid", "model": {"expr": "rate(ruler_alert_metric[5m])"}},
+										{"refId": "B", "datasourceUid": "__expr__", "model": {"expr": "$A > 10"}}
+									]
+								}
+							}
+						]
+					}
+				]
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	res, err := Scan(context.Background(), &config.GrafanaConfig{
+		URL:      srv.URL,
+		AlertAPI: "ruler",
+	})
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	if res.DashboardCount != 3 || res.AlertRuleCount != 1 {
+		t.Fatalf("unexpected counts: dashboards=%d alerts=%d", res.DashboardCount, res.AlertRuleCount)
+	}
+	if len(res.Warnings) != 0 {
+		t.Fatalf("expected 0 parse warnings when Loki/Tempo panels are filtered out, got %v", res.Warnings)
+	}
+	seen := map[string]bool{}
+	for _, ref := range res.Refs {
+		seen[ref.MetricName] = true
+	}
+	for _, want := range []string{"prom_panel_metric", "prom_var_metric", "ruler_alert_metric"} {
+		if !seen[want] {
+			t.Errorf("missing expected metric %q in %+v", want, seen)
+		}
 	}
 }

@@ -15,17 +15,34 @@ import (
 // SourceCounts captures the current run's object counts across configured sources for
 // the Baseline Drift Circuit Breaker (Invariant #4).
 type SourceCounts struct {
-	Dashboards      *int
-	GrafanaAlerts   *int
-	PromRules       *int
-	QueryLogEntries *int
+	Dashboards           *int
+	GrafanaAlerts        *int
+	PromRules            *int
+	RulerRules           *int
+	KEDATriggers         *int
+	PromAdapterRules     *int
+	RolloutTemplates     *int
+	FlaggerTemplates     *int
+	AlertmanagerMatchers *int
+	PersesDashboards     *int
+	SLOs                 *int
+	QueryLogEntries      *int
+	QueryLogDailyRate    *float64
 }
 
 // CheckBaselineDrift compares current source counts against persisted ledger baselines.
-// If any configured source dropped more than threshold% and acceptShift is false,
+// Static sources use HWM comparison against staticThresholdPct (default 20%);
+// query-log volume compares daily entry rate against queryLogThresholdPct (default 50%).
+// If any configured source dropped more than its threshold and acceptShift is false,
 // synthesis MUST abort (Invariant #4).
-func CheckBaselineDrift(prev state.BaselineCounts, curr SourceCounts, thresholdPct float64, acceptShift bool) (drifted bool, details []string) {
-	check := func(name string, prevVal, currVal *int) {
+func CheckBaselineDrift(
+	prev state.BaselineCounts,
+	curr SourceCounts,
+	staticThresholdPct float64,
+	queryLogThresholdPct float64,
+	acceptShift bool,
+) (drifted bool, details []string) {
+	checkInt := func(name string, prevVal, currVal *int, thresholdPct float64) {
 		if prevVal == nil || currVal == nil || *prevVal <= 0 {
 			return
 		}
@@ -41,10 +58,32 @@ func CheckBaselineDrift(prev state.BaselineCounts, curr SourceCounts, thresholdP
 		}
 	}
 
-	check("dashboards", prev.Dashboards, curr.Dashboards)
-	check("grafana_alerts", prev.GrafanaAlerts, curr.GrafanaAlerts)
-	check("prom_rules", prev.PromRules, curr.PromRules)
-	check("query_log_entries", prev.QueryLogEntries, curr.QueryLogEntries)
+	checkInt("dashboards", prev.Dashboards, curr.Dashboards, staticThresholdPct)
+	checkInt("grafana_alerts", prev.GrafanaAlerts, curr.GrafanaAlerts, staticThresholdPct)
+	checkInt("prom_rules", prev.PromRules, curr.PromRules, staticThresholdPct)
+	checkInt("ruler_rules", prev.RulerRules, curr.RulerRules, staticThresholdPct)
+	checkInt("keda_triggers", prev.KEDATriggers, curr.KEDATriggers, staticThresholdPct)
+	checkInt("prom_adapter_rules", prev.PromAdapterRules, curr.PromAdapterRules, staticThresholdPct)
+	checkInt("rollout_templates", prev.RolloutTemplates, curr.RolloutTemplates, staticThresholdPct)
+	checkInt("flagger_templates", prev.FlaggerTemplates, curr.FlaggerTemplates, staticThresholdPct)
+	checkInt("alertmanager_matchers", prev.AlertmanagerMatchers, curr.AlertmanagerMatchers, staticThresholdPct)
+	checkInt("perses_dashboards", prev.PersesDashboards, curr.PersesDashboards, staticThresholdPct)
+	checkInt("slos", prev.SLOs, curr.SLOs, staticThresholdPct)
+
+	if prev.QueryLogDailyRate != nil && curr.QueryLogDailyRate != nil && *prev.QueryLogDailyRate > 0 {
+		if *curr.QueryLogDailyRate < *prev.QueryLogDailyRate {
+			dropPct := (*prev.QueryLogDailyRate - *curr.QueryLogDailyRate) / *prev.QueryLogDailyRate * 100.0
+			if dropPct > queryLogThresholdPct {
+				details = append(details, fmt.Sprintf(
+					"query_log_daily_rate dropped %.1f%% (%.1f/d -> %.1f/d, threshold %.1f%%)",
+					dropPct, *prev.QueryLogDailyRate, *curr.QueryLogDailyRate, queryLogThresholdPct,
+				))
+			}
+		}
+	} else if curr.QueryLogDailyRate == nil {
+		// Legacy fallback when daily rate is unavailable
+		checkInt("query_log_entries", prev.QueryLogEntries, curr.QueryLogEntries, queryLogThresholdPct)
+	}
 
 	if len(details) > 0 && !acceptShift {
 		return true, details
@@ -52,23 +91,43 @@ func CheckBaselineDrift(prev state.BaselineCounts, curr SourceCounts, thresholdP
 	return false, details
 }
 
-// UpdateBaselineCounts writes current source counts into the ledger (only when safe or explicitly accepted).
-func UpdateBaselineCounts(ledger *state.Ledger, curr SourceCounts) {
-	if curr.Dashboards != nil {
-		v := *curr.Dashboards
-		ledger.BaselineCounts.Dashboards = &v
+// UpdateBaselineCounts persists monotonic High-Water Mark static baselines (preventing gradual
+// bleed-down unless acceptShift is true) and updates the rolling query-log daily rate baseline.
+func UpdateBaselineCounts(ledger *state.Ledger, curr SourceCounts, acceptShift bool) {
+	updateHWM := func(dst **int, currVal *int) {
+		if currVal == nil {
+			return
+		}
+		if acceptShift || *dst == nil || *currVal > **dst {
+			v := *currVal
+			*dst = &v
+		}
 	}
-	if curr.GrafanaAlerts != nil {
-		v := *curr.GrafanaAlerts
-		ledger.BaselineCounts.GrafanaAlerts = &v
-	}
-	if curr.PromRules != nil {
-		v := *curr.PromRules
-		ledger.BaselineCounts.PromRules = &v
-	}
+
+	updateHWM(&ledger.BaselineCounts.Dashboards, curr.Dashboards)
+	updateHWM(&ledger.BaselineCounts.GrafanaAlerts, curr.GrafanaAlerts)
+	updateHWM(&ledger.BaselineCounts.PromRules, curr.PromRules)
+	updateHWM(&ledger.BaselineCounts.RulerRules, curr.RulerRules)
+	updateHWM(&ledger.BaselineCounts.KEDATriggers, curr.KEDATriggers)
+	updateHWM(&ledger.BaselineCounts.PromAdapterRules, curr.PromAdapterRules)
+	updateHWM(&ledger.BaselineCounts.RolloutTemplates, curr.RolloutTemplates)
+	updateHWM(&ledger.BaselineCounts.FlaggerTemplates, curr.FlaggerTemplates)
+	updateHWM(&ledger.BaselineCounts.AlertmanagerMatchers, curr.AlertmanagerMatchers)
+	updateHWM(&ledger.BaselineCounts.PersesDashboards, curr.PersesDashboards)
+	updateHWM(&ledger.BaselineCounts.SLOs, curr.SLOs)
+
 	if curr.QueryLogEntries != nil {
 		v := *curr.QueryLogEntries
 		ledger.BaselineCounts.QueryLogEntries = &v
+	}
+	if curr.QueryLogDailyRate != nil {
+		var next float64
+		if acceptShift || ledger.BaselineCounts.QueryLogDailyRate == nil {
+			next = *curr.QueryLogDailyRate
+		} else {
+			next = math.Round((0.8*(*ledger.BaselineCounts.QueryLogDailyRate)+0.2*(*curr.QueryLogDailyRate))*100) / 100
+		}
+		ledger.BaselineCounts.QueryLogDailyRate = &next
 	}
 }
 
@@ -124,15 +183,17 @@ func IsSourceExcluded(ref metrics.UsageRef, excludes []config.ExcludeSource) boo
 		val := strings.TrimSpace(ex.Value)
 		switch ex.Type {
 		case "dashboard_uid":
-			if ref.Origin == metrics.OriginGrafanaDashboard && strings.TrimPrefix(ref.SourceID, "grafana-dashboard:") == val {
+			if (ref.Origin == metrics.OriginGrafanaDashboard && strings.TrimPrefix(ref.SourceID, "grafana-dashboard:") == val) ||
+				(ref.Origin == metrics.OriginPersesDashboard && strings.TrimPrefix(ref.SourceID, "perses-dashboard:") == val) ||
+				(ref.DashboardUID != "" && ref.DashboardUID == val) {
 				return true
 			}
 		case "dashboard_title":
-			if ref.Origin == metrics.OriginGrafanaDashboard && strings.EqualFold(ref.SourceName, val) {
+			if (ref.Origin == metrics.OriginGrafanaDashboard || ref.Origin == metrics.OriginPersesDashboard) && strings.EqualFold(ref.SourceName, val) {
 				return true
 			}
 		case "dashboard_folder":
-			if ref.Origin == metrics.OriginGrafanaDashboard && strings.EqualFold(ref.SourceFolder, val) {
+			if (ref.Origin == metrics.OriginGrafanaDashboard || ref.Origin == metrics.OriginPersesDashboard) && strings.EqualFold(ref.SourceFolder, val) {
 				return true
 			}
 		case "dashboard_tag":
@@ -144,7 +205,7 @@ func IsSourceExcluded(ref metrics.UsageRef, excludes []config.ExcludeSource) boo
 				}
 			}
 		case "rule_file":
-			if (ref.Origin == metrics.OriginPromAlert || ref.Origin == metrics.OriginPromRecording) &&
+			if (ref.Origin == metrics.OriginPromAlert || ref.Origin == metrics.OriginPromRecording || ref.Origin == metrics.OriginRulerAlert) &&
 				strings.Contains(ref.SourceFolder, val) {
 				return true
 			}

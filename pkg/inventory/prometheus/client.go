@@ -4,17 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"trimtab.io/trimtab/pkg/config"
+	"trimtab.io/trimtab/pkg/httpclient"
 	"trimtab.io/trimtab/pkg/metrics"
 )
 
@@ -226,55 +226,69 @@ func buildCollapseEstimate(dropped []string, current, collapsed int, isSingle bo
 
 // HTTPClient implements Prometheus / Mimir inventory fetching and bounded `without` collapse queries.
 type HTTPClient struct {
-	baseURL     string
-	bearerToken string
-	headers     map[string]string
-	client      *http.Client
+	hc        *httpclient.Client
+	selector  string
+	tsdbLimit int
 }
 
-func NewHTTPClient(cfg config.InventoryConfig) *HTTPClient {
-	timeout := cfg.Timeout.Duration()
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-	return &HTTPClient{
-		baseURL:     strings.TrimRight(cfg.PrometheusURL, "/"),
-		bearerToken: cfg.BearerToken,
-		headers:     cfg.Headers,
-		client:      &http.Client{Timeout: timeout},
-	}
-}
-
-func (c *HTTPClient) get(ctx context.Context, endpoint string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+endpoint, nil)
+// NewHTTPClient builds a Prometheus/Mimir HTTPClient backed by pkg/httpclient.
+func NewHTTPClient(cfg config.InventoryConfig) (*HTTPClient, error) {
+	auth, err := cfg.EffectiveAuth()
 	if err != nil {
 		return nil, err
 	}
-	if c.bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
-	}
-	for k, v := range c.headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := c.client.Do(req)
+	hc, err := httpclient.New(httpclient.Options{
+		BaseURL:     cfg.PrometheusURL,
+		Timeout:     cfg.Timeout.Duration(),
+		TenantID:    cfg.TenantID,
+		Headers:     cfg.Headers,
+		HeadersEnv:  cfg.HeadersEnv,
+		HeadersFile: cfg.HeadersFile,
+		Auth:        auth,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("prometheus GET %s: %w", endpoint, err)
+		return nil, fmt.Errorf("prometheus client: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	tsdbLimit := cfg.TSDBLimit
+	if tsdbLimit <= 0 {
+		tsdbLimit = 10000
+	}
+	return &HTTPClient{
+		hc:        hc,
+		selector:  normalizeSelector(cfg.Selector),
+		tsdbLimit: tsdbLimit,
+	}, nil
+}
+
+func (c *HTTPClient) get(ctx context.Context, endpoint string) ([]byte, error) {
+	body, err := c.hc.Get(ctx, endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("prometheus read %s: %w", endpoint, err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("prometheus GET %s returned HTTP %d: %s", endpoint, resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("prometheus %w", err)
 	}
 	return body, nil
+}
+
+func normalizeSelector(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "{")
+	s = strings.TrimSuffix(s, "}")
+	return strings.TrimSpace(s)
+}
+
+func formatMetricSelector(metricName, selector string) string {
+	if selector == "" {
+		return metricName
+	}
+	return fmt.Sprintf("%s{%s}", metricName, selector)
 }
 
 // FetchHTTP collects metric family metadata, historical metric names over `window`,
 // TSDB head series counts, and checks local TSDB retention (warning only, never hard-failing).
 func FetchHTTP(ctx context.Context, cfg config.InventoryConfig, window time.Duration, now time.Time) (*InventorySnapshot, CollapseEvaluator, error) {
-	client := NewHTTPClient(cfg)
+	client, err := NewHTTPClient(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	snap := &InventorySnapshot{
 		Metadata:         make(map[string]MetricMetadata),
 		SeriesCounts:     make(map[string]int),
@@ -283,6 +297,7 @@ func FetchHTTP(ctx context.Context, cfg config.InventoryConfig, window time.Dura
 		FirstSeenHints:   make(map[string]time.Time),
 		NamingMode:       metrics.NamingMode(cfg.NamingMode),
 		OTLPNameMap:      cfg.OTLPNameMap,
+		Warnings:         client.hc.Warnings(),
 	}
 
 	// 1. Historical metric names over observation window (Invariant #5: decoupled from ~2h head block)
@@ -290,6 +305,9 @@ func FetchHTTP(ctx context.Context, cfg config.InventoryConfig, window time.Dura
 	q := url.Values{}
 	q.Set("start", strconv.FormatInt(start.Unix(), 10))
 	q.Set("end", strconv.FormatInt(now.Unix(), 10))
+	if client.selector != "" {
+		q.Add("match[]", "{"+client.selector+"}")
+	}
 	namesBody, err := client.get(ctx, "/api/v1/label/__name__/values?"+q.Encode())
 	if err != nil {
 		return nil, nil, err
@@ -324,25 +342,35 @@ func FetchHTTP(ctx context.Context, cfg config.InventoryConfig, window time.Dura
 		}
 	}
 
-	// 3. TSDB head series counts (/api/v1/status/tsdb)
-	tsdbBody, err := client.get(ctx, "/api/v1/status/tsdb")
-	if err != nil {
-		snap.Warnings = append(snap.Warnings, fmt.Sprintf("prometheus /api/v1/status/tsdb unavailable: %v", err))
-	} else {
-		var tsdbResp struct {
-			Status string `json:"status"`
-			Data   struct {
-				SeriesCountByMetricName []struct {
-					Name  string `json:"name"`
-					Value int    `json:"value"`
-				} `json:"seriesCountByMetricName"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(tsdbBody, &tsdbResp); err == nil {
-			for _, item := range tsdbResp.Data.SeriesCountByMetricName {
-				snap.SeriesCounts[item.Name] = item.Value
-				nameSet[item.Name] = struct{}{}
+	// 3. TSDB head series counts (/api/v1/status/tsdb?limit=...) or batched `count by (__name__)`
+	tsdbLoaded := false
+	if client.selector == "" {
+		tsdbBody, err := client.get(ctx, fmt.Sprintf("/api/v1/status/tsdb?limit=%d", client.tsdbLimit))
+		if err != nil {
+			snap.Warnings = append(snap.Warnings, fmt.Sprintf("prometheus /api/v1/status/tsdb unavailable: %v", err))
+		} else {
+			var tsdbResp struct {
+				Status string `json:"status"`
+				Data   struct {
+					SeriesCountByMetricName []struct {
+						Name  string `json:"name"`
+						Value int    `json:"value"`
+					} `json:"seriesCountByMetricName"`
+				} `json:"data"`
 			}
+			if err := json.Unmarshal(tsdbBody, &tsdbResp); err == nil && len(tsdbResp.Data.SeriesCountByMetricName) > 0 {
+				for _, item := range tsdbResp.Data.SeriesCountByMetricName {
+					snap.SeriesCounts[item.Name] = item.Value
+					nameSet[item.Name] = struct{}{}
+				}
+				tsdbLoaded = true
+			}
+		}
+	}
+
+	if !tsdbLoaded && len(nameSet) > 0 {
+		if err := client.populateSeriesCountsByQuery(ctx, nameSet, snap.SeriesCounts); err != nil {
+			snap.Warnings = append(snap.Warnings, fmt.Sprintf("prometheus batched series count fallback failed: %v", err))
 		}
 	}
 
@@ -367,6 +395,27 @@ func FetchHTTP(ctx context.Context, cfg config.InventoryConfig, window time.Dura
 		}
 	}
 
+	// 4b. Optional early-window probe for FirstSeenHints (seeds Invariant #5 observation age).
+	if cfg.ProbeFirstSeen {
+		pq := url.Values{}
+		pq.Set("start", strconv.FormatInt(start.Unix(), 10))
+		pq.Set("end", strconv.FormatInt(start.Add(24*time.Hour).Unix(), 10))
+		if client.selector != "" {
+			pq.Add("match[]", "{"+client.selector+"}")
+		}
+		if probeBody, err := client.get(ctx, "/api/v1/label/__name__/values?"+pq.Encode()); err == nil {
+			var probeResp struct {
+				Status string   `json:"status"`
+				Data   []string `json:"data"`
+			}
+			if err := json.Unmarshal(probeBody, &probeResp); err == nil {
+				for _, n := range probeResp.Data {
+					snap.FirstSeenHints[n] = start
+				}
+			}
+		}
+	}
+
 	// 5. Fetch label names for top-cardinality metrics (bounded by MaxCollapseFamilies)
 	snap.MetricNames = make([]string, 0, len(nameSet))
 	for n := range nameSet {
@@ -378,7 +427,11 @@ func FetchHTTP(ctx context.Context, cfg config.InventoryConfig, window time.Dura
 		topMetrics := topMetricsBySeries(snap.SeriesCounts, cfg.MaxCollapseFamilies)
 		for _, m := range topMetrics {
 			lblQ := url.Values{}
-			lblQ.Add("match[]", m)
+			if client.selector != "" {
+				lblQ.Add("match[]", fmt.Sprintf(`{__name__=%q,%s}`, m, client.selector))
+			} else {
+				lblQ.Add("match[]", m)
+			}
 			if body, err := client.get(ctx, "/api/v1/labels?"+lblQ.Encode()); err == nil {
 				var lResp struct {
 					Status string   `json:"status"`
@@ -392,6 +445,63 @@ func FetchHTTP(ctx context.Context, cfg config.InventoryConfig, window time.Dura
 	}
 
 	return snap, client, nil
+}
+
+func (c *HTTPClient) populateSeriesCountsByQuery(ctx context.Context, nameSet map[string]struct{}, dst map[string]int) error {
+	names := make([]string, 0, len(nameSet))
+	for n := range nameSet {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	const batchSize = 50
+	for i := 0; i < len(names); i += batchSize {
+		end := i + batchSize
+		if end > len(names) {
+			end = len(names)
+		}
+		escaped := make([]string, 0, end-i)
+		for _, n := range names[i:end] {
+			escaped = append(escaped, regexp.QuoteMeta(n))
+		}
+		nameMatcher := fmt.Sprintf(`__name__=~"%s"`, strings.Join(escaped, "|"))
+		selector := nameMatcher
+		if c.selector != "" {
+			selector = c.selector + "," + nameMatcher
+		}
+		expr := fmt.Sprintf(`count by (__name__) ({%s})`, selector)
+
+		q := url.Values{}
+		q.Set("query", expr)
+		body, err := c.get(ctx, "/api/v1/query?"+q.Encode())
+		if err != nil {
+			return err
+		}
+		var resp struct {
+			Status string `json:"status"`
+			Data   struct {
+				Result []struct {
+					Metric map[string]string `json:"metric"`
+					Value  [2]any            `json:"value"`
+				} `json:"result"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return err
+		}
+		for _, item := range resp.Data.Result {
+			name := item.Metric["__name__"]
+			if name == "" {
+				continue
+			}
+			if valStr, ok := item.Value[1].(string); ok {
+				if f, err := strconv.ParseFloat(valStr, 64); err == nil {
+					dst[name] = int(math.Round(f))
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func topMetricsBySeries(counts map[string]int, limit int) []string {
@@ -429,9 +539,11 @@ func (c *HTTPClient) EstimateCollapse(ctx context.Context, metricName string, un
 	sortedUnused := append([]string(nil), unusedLabels...)
 	sort.Strings(sortedUnused)
 
+	targetExpr := formatMetricSelector(metricName, c.selector)
+
 	// Query exact current series count if unknown
 	if currentSeries <= 0 {
-		n, err := c.instantScalar(ctx, fmt.Sprintf("count(%s)", metricName))
+		n, err := c.instantScalar(ctx, fmt.Sprintf("count(%s)", targetExpr))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -441,7 +553,7 @@ func (c *HTTPClient) EstimateCollapse(ctx context.Context, metricName string, un
 		return nil, nil, nil
 	}
 
-	combinedQuery := formatWithoutQuery(metricName, sortedUnused)
+	combinedQuery := formatWithoutQuery(targetExpr, sortedUnused)
 	combinedCount, err := c.instantScalar(ctx, combinedQuery)
 	if err != nil {
 		return nil, nil, err
@@ -450,7 +562,7 @@ func (c *HTTPClient) EstimateCollapse(ctx context.Context, metricName string, un
 
 	var singles []metrics.LabelCollapseEstimate
 	for _, lbl := range sortedUnused {
-		q := formatWithoutQuery(metricName, []string{lbl})
+		q := formatWithoutQuery(targetExpr, []string{lbl})
 		cnt, err := c.instantScalar(ctx, q)
 		if err != nil {
 			continue

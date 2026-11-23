@@ -1,0 +1,121 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "trimtab.fullname" . }}
+  labels:
+    {{- include "trimtab.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.cronjob.schedule | quote }}
+  {{- if .Values.cronjob.timeZone }}
+  timeZone: {{ .Values.cronjob.timeZone | quote }}
+  {{- end }}
+  concurrencyPolicy: {{ .Values.cronjob.concurrencyPolicy }}
+  suspend: {{ .Values.cronjob.suspend }}
+  successfulJobsHistoryLimit: {{ .Values.cronjob.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cronjob.failedJobsHistoryLimit }}
+  {{- if not (kindIs "invalid" .Values.cronjob.startingDeadlineSeconds) }}
+  startingDeadlineSeconds: {{ .Values.cronjob.startingDeadlineSeconds }}
+  {{- end }}
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "trimtab.labels" . | nindent 8 }}
+    spec:
+      backoffLimit: {{ .Values.cronjob.backoffLimit }}
+      {{- if not (kindIs "invalid" .Values.cronjob.activeDeadlineSeconds) }}
+      activeDeadlineSeconds: {{ .Values.cronjob.activeDeadlineSeconds }}
+      {{- end }}
+      {{- if not (kindIs "invalid" .Values.cronjob.ttlSecondsAfterFinished) }}
+      ttlSecondsAfterFinished: {{ .Values.cronjob.ttlSecondsAfterFinished }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "trimtab.selectorLabels" . | nindent 12 }}
+            {{- with .Values.podLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+            {{- with .Values.podAnnotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ include "trimtab.serviceAccountName" . }}
+          automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.podSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: trimtab
+              image: {{ include "trimtab.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              args:
+                - analyze
+                - --config
+                - /etc/trimtab/trimtab.yaml
+                - --format
+                - {{ .Values.cronjob.reportFormat | quote }}
+                {{- if .Values.cronjob.noStateWrite }}
+                - --no-state-write
+                {{- end }}
+                {{- range .Values.cronjob.extraArgs }}
+                - {{ . | quote }}
+                {{- end }}
+              {{- with .Values.securityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- with .Values.env }}
+              env:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- with .Values.envFrom }}
+              envFrom:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/trimtab
+                  readOnly: true
+                - name: state
+                  mountPath: {{ .Values.persistence.mountPath }}
+                {{- with .Values.extraVolumeMounts }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              {{- with .Values.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+          volumes:
+            - name: config
+              configMap:
+                name: {{ include "trimtab.fullname" . }}
+            - name: state
+              {{- if .Values.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: {{ include "trimtab.pvcName" . }}
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+            {{- with .Values.extraVolumes }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

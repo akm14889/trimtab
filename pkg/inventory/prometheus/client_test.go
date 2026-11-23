@@ -111,3 +111,125 @@ func TestFetchHTTPAndShortRetentionWarningOnly(t *testing.T) {
 		t.Fatalf("unexpected HTTP collapse estimate: %+v", combined)
 	}
 }
+
+func TestFetchHTTPLiveScaleHardeningAndAuth(t *testing.T) {
+	t.Run("tsdb limit, selector batched counts, scoped collapse, and ProbeFirstSeen", func(t *testing.T) {
+		var sawTSDBLimit bool
+		var sawScopedNames bool
+		var sawBatchedCount bool
+		var sawScopedCollapse bool
+		var sawProbeWindow bool
+
+		now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+		window := 30 * 24 * time.Hour
+		startStr := "1792756800" // 2026-10-23T12:00:00Z
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Scope-OrgID") != "prod-tenant" {
+				http.Error(w, "missing tenant", http.StatusUnauthorized)
+				return
+			}
+			if !strings.HasPrefix(r.Header.Get("User-Agent"), "trimtab/") {
+				t.Errorf("expected User-Agent trimtab/..., got %q", r.Header.Get("User-Agent"))
+			}
+			switch r.URL.Path {
+			case "/api/v1/label/__name__/values":
+				match := r.URL.Query().Get("match[]")
+				if strings.Contains(match, `cluster="staging"`) {
+					sawScopedNames = true
+				}
+				if r.URL.Query().Get("start") == startStr && r.URL.Query().Get("end") != "" {
+					// Check if this is the 24h ProbeFirstSeen call
+					if r.URL.Query().Get("end") == "1792843200" {
+						sawProbeWindow = true
+						_, _ = w.Write([]byte(`{"status":"success","data":["m_a"]}`))
+						return
+					}
+				}
+				_, _ = w.Write([]byte(`{"status":"success","data":["m_a","m_b"]}`))
+			case "/api/v1/metadata":
+				_, _ = w.Write([]byte(`{"status":"success","data":{"m_a":[{"type":"gauge","help":"a"}]}}`))
+			case "/api/v1/status/tsdb":
+				if r.URL.Query().Get("limit") == "10000" {
+					sawTSDBLimit = true
+				}
+				_, _ = w.Write([]byte(`{"status":"success","data":{"seriesCountByMetricName":[{"name":"m_a","value":100}]}}`))
+			case "/api/v1/status/runtimeinfo":
+				_, _ = w.Write([]byte(`{"status":"success","data":{"storageRetention":"30d"}}`))
+			case "/api/v1/labels":
+				_, _ = w.Write([]byte(`{"status":"success","data":["__name__","service","pod"]}`))
+			case "/api/v1/query":
+				q := r.URL.Query().Get("query")
+				if strings.HasPrefix(q, "count by (__name__)") && strings.Contains(q, `cluster="staging"`) {
+					sawBatchedCount = true
+					_, _ = w.Write([]byte(`{"status":"success","data":{"result":[{"metric":{"__name__":"m_a"},"value":[1,"42"]},{"metric":{"__name__":"m_b"},"value":[1,"8"]}]}}`))
+					return
+				}
+				if strings.Contains(q, `without (pod)`) && strings.Contains(q, `m_a{cluster="staging"}`) {
+					sawScopedCollapse = true
+					_, _ = w.Write([]byte(`{"status":"success","data":{"result":[{"value":[1,"10"]}]}}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"status":"success","data":{"result":[]}}`))
+			}
+		}))
+		defer srv.Close()
+
+		// 1. Unscoped checks ?limit=10000
+		t.Setenv("TEST_PROM_TOKEN", "prom-tok")
+		cfgUnscoped := config.InventoryConfig{
+			PrometheusURL: srv.URL,
+			TenantID:      "prod-tenant",
+			TSDBLimit:     10000,
+			Auth:          &config.HTTPAuthConfig{BearerTokenEnv: "TEST_PROM_TOKEN"},
+		}
+		if _, _, err := FetchHTTP(context.Background(), cfgUnscoped, window, now); err != nil {
+			t.Fatal(err)
+		}
+		if !sawTSDBLimit {
+			t.Fatal("expected /api/v1/status/tsdb?limit=10000")
+		}
+
+		// 2. Scoped selector uses match[], batched count by (__name__), ProbeFirstSeen, and scoped collapse
+		cfgScoped := config.InventoryConfig{
+			PrometheusURL:       srv.URL,
+			TenantID:            "prod-tenant",
+			Selector:            `{cluster="staging"}`,
+			ProbeFirstSeen:      true,
+			MaxCollapseFamilies: 5,
+			Auth:                &config.HTTPAuthConfig{BearerTokenEnv: "TEST_PROM_TOKEN"},
+		}
+		snap, eval, err := FetchHTTP(context.Background(), cfgScoped, window, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sawScopedNames || !sawBatchedCount || !sawProbeWindow {
+			t.Fatalf("missing scoped behavior: names=%v batched=%v probe=%v", sawScopedNames, sawBatchedCount, sawProbeWindow)
+		}
+		if snap.SeriesCounts["m_a"] != 42 || snap.SeriesCounts["m_b"] != 8 {
+			t.Fatalf("unexpected scoped series counts: %+v", snap.SeriesCounts)
+		}
+		if snap.FirstSeenHints["m_a"].IsZero() {
+			t.Fatal("expected FirstSeenHints populated for m_a via ProbeFirstSeen")
+		}
+		est, _, err := eval.EstimateCollapse(context.Background(), "m_a", []string{"pod"}, 42)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sawScopedCollapse || est.CollapsedSeries != 10 {
+			t.Fatalf("expected scoped collapse query, got saw=%v est=%+v", sawScopedCollapse, est)
+		}
+	})
+
+	t.Run("401 fails closed immediately", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+
+		_, _, err := FetchHTTP(context.Background(), config.InventoryConfig{PrometheusURL: srv.URL}, 30*24*time.Hour, time.Now())
+		if err == nil || !strings.Contains(err.Error(), "401") {
+			t.Fatalf("expected 401 fail-closed error, got %v", err)
+		}
+	})
+}

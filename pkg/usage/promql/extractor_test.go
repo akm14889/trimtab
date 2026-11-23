@@ -95,4 +95,41 @@ func TestExtractLabelSemantics(t *testing.T) {
 			t.Errorf("expected regex selector .+, got %+v", a)
 		}
 	})
+
+	t.Run("scalar binary comparison retains outer aggregation label precision", func(t *testing.T) {
+		for _, expr := range []string{
+			`sum by (job) (rate(http_requests_total[5m]) > 0)`,
+			`count by (job) (up == 0)`,
+			`sum by (job) (100 * rate(http_requests_total[5m]))`,
+		} {
+			res, err := Extract(expr)
+			if err != nil {
+				t.Fatalf("Extract(%q) error: %v", expr, err)
+			}
+			if len(res.Accesses) != 1 {
+				t.Fatalf("Extract(%q) got %d accesses, want 1", expr, len(res.Accesses))
+			}
+			a := res.Accesses[0]
+			if a.PreservesAll {
+				t.Errorf("Extract(%q) PreservesAll = true, want false", expr)
+			}
+			if !reflect.DeepEqual(a.ExplicitLabels, []string{"job"}) {
+				t.Errorf("Extract(%q) ExplicitLabels = %v, want [job]", expr, a.ExplicitLabels)
+			}
+		}
+
+		// Vector-to-vector binary expression without on/ignoring still preserves all labels.
+		res, err := Extract(`sum by (job) (metric_a / metric_b)`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Accesses) != 2 {
+			t.Fatalf("got %d accesses, want 2", len(res.Accesses))
+		}
+		for _, a := range res.Accesses {
+			if !a.PreservesAll {
+				t.Errorf("expected vector-to-vector binary expression to set PreservesAll=true for %s", a.MetricName)
+			}
+		}
+	})
 }

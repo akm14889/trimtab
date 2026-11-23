@@ -16,35 +16,48 @@ const CurrentSchemaVersion = 1
 
 // BaselineCounts stores per-source object counts for the Baseline Drift Circuit Breaker (Invariant #4).
 type BaselineCounts struct {
-	Dashboards      *int `json:"dashboards,omitempty"`
-	GrafanaAlerts   *int `json:"grafana_alerts,omitempty"`
-	PromRules       *int `json:"prom_rules,omitempty"`
-	QueryLogEntries *int `json:"query_log_entries,omitempty"`
+	Dashboards        *int     `json:"dashboards,omitempty"`
+	GrafanaAlerts     *int     `json:"grafana_alerts,omitempty"`
+	PromRules         *int     `json:"prom_rules,omitempty"`
+	RulerRules        *int     `json:"ruler_rules,omitempty"`
+	KEDATriggers      *int     `json:"keda_triggers,omitempty"`
+	PromAdapterRules  *int     `json:"prom_adapter_rules,omitempty"`
+	RolloutTemplates     *int     `json:"rollout_templates,omitempty"`
+	FlaggerTemplates     *int     `json:"flagger_templates,omitempty"`
+	AlertmanagerMatchers *int     `json:"alertmanager_matchers,omitempty"`
+	PersesDashboards     *int     `json:"perses_dashboards,omitempty"`
+	SLOs                 *int     `json:"slos,omitempty"`
+	QueryLogEntries      *int     `json:"query_log_entries,omitempty"`
+	QueryLogDailyRate *float64 `json:"query_log_daily_rate,omitempty"`
 }
 
 // QueryLogCoverage tracks cold-start query log observation coverage (Invariant #1).
 type QueryLogCoverage struct {
-	EarliestTimestamp time.Time `json:"earliest_timestamp,omitempty"`
-	LatestTimestamp   time.Time `json:"latest_timestamp,omitempty"`
-	CoveredDays       float64   `json:"covered_days"`
-	APIUserQueries    int       `json:"api_user_queries"`
-	RuleEvalQueries   int       `json:"rule_eval_queries"`
-	ExcludedQueries   int       `json:"excluded_queries"`
+	EarliestTimestamp time.Time      `json:"earliest_timestamp,omitempty"`
+	LatestTimestamp   time.Time      `json:"latest_timestamp,omitempty"`
+	CoveredDays       float64        `json:"covered_days"`
+	CoveredDates      map[string]int `json:"covered_dates,omitempty"`
+	APIUserQueries    int            `json:"api_user_queries"`
+	RuleEvalQueries   int            `json:"rule_eval_queries"`
+	ExcludedQueries   int            `json:"excluded_queries"`
 }
 
 // SeenFamily persists family discovery timestamps decoupled from TSDB head block (Invariant #5).
 type SeenFamily struct {
-	FirstSeenAt   time.Time `json:"first_seen_at"`
-	LastSeenAt    time.Time `json:"last_seen_at"`
-	LastQueriedAt time.Time `json:"last_queried_at,omitempty"`
+	FirstSeenAt         time.Time `json:"first_seen_at"`
+	LastSeenAt          time.Time `json:"last_seen_at"`
+	LastQueriedAt       time.Time `json:"last_queried_at,omitempty"`
+	LastBucketQueriedAt time.Time `json:"last_bucket_queried_at,omitempty"`
 }
 
 // TrancheRecord tracks rollout state and soak window per tranche (Invariant #3).
 type TrancheRecord struct {
 	Number            int       `json:"number"`
 	StartedAt         time.Time `json:"started_at"`
-	SoakUntil         time.Time `json:"soak_until"`
-	Status            string    `json:"status"` // "active", "soaked", "blocked_regret"
+	ActivatedAt       time.Time `json:"activated_at,omitempty"`
+	ConfirmedAt       time.Time `json:"confirmed_at,omitempty"`
+	SoakUntil         time.Time `json:"soak_until,omitempty"`
+	Status            string    `json:"status"` // "pending_confirmation", "soaking", "soaked", "blocked_regret" (legacy: "active")
 	Families          []string  `json:"families"`
 	Series            int       `json:"series"`
 	UnresolvedRegrets int       `json:"unresolved_regrets"`
@@ -58,6 +71,10 @@ type ActiveDropRecord struct {
 	Tranche      int                `json:"tranche"`
 	SeriesAtDrop int                `json:"series_at_drop"`
 	Reason       string             `json:"reason,omitempty"`
+	MetricType   metrics.MetricType `json:"metric_type,omitempty"`
+	Members      []string           `json:"members,omitempty"`
+	NamingMode   metrics.NamingMode `json:"naming_mode,omitempty"`
+	OTLPName     string             `json:"otlp_name,omitempty"`
 }
 
 // Ledger is the persistent .trimtab-state.json State Ledger.
@@ -79,6 +96,9 @@ func NewLedger() *Ledger {
 		Version:      CurrentSchemaVersion,
 		SeenFamilies: make(map[string]*SeenFamily),
 		ActiveDrops:  make(map[string]*ActiveDropRecord),
+		QueryLogCoverage: QueryLogCoverage{
+			CoveredDates: make(map[string]int),
+		},
 	}
 }
 
@@ -106,6 +126,9 @@ func Load(path string) (*Ledger, error) {
 	}
 	if l.ActiveDrops == nil {
 		l.ActiveDrops = make(map[string]*ActiveDropRecord)
+	}
+	if l.QueryLogCoverage.CoveredDates == nil {
+		l.QueryLogCoverage.CoveredDates = make(map[string]int)
 	}
 	return l, nil
 }
@@ -182,8 +205,40 @@ func (l *Ledger) RecordLastQueried(family string, ts time.Time) {
 	}
 }
 
-// UpdateQueryLogCoverage widens the tracked query-log time coverage across runs.
-func (l *Ledger) UpdateQueryLogCoverage(earliest, latest time.Time, apiUser, ruleEval, excluded int) {
+// RecordLastBucketQueried updates last_bucket_queried_at for a histogram family.
+func (l *Ledger) RecordLastBucketQueried(family string, ts time.Time) {
+	if ts.IsZero() {
+		return
+	}
+	sf, ok := l.SeenFamilies[family]
+	if !ok {
+		sf = &SeenFamily{FirstSeenAt: ts, LastSeenAt: ts}
+		l.SeenFamilies[family] = sf
+	}
+	if ts.After(sf.LastBucketQueriedAt) {
+		sf.LastBucketQueriedAt = ts
+	}
+}
+
+// UpdateQueryLogCoverage updates trailing-window UTC calendar date coverage and query-log totals.
+func (l *Ledger) UpdateQueryLogCoverage(
+	observedDates map[string]int,
+	earliest, latest time.Time,
+	apiUser, ruleEval, excluded int,
+	now time.Time,
+	window time.Duration,
+) {
+	if l.QueryLogCoverage.CoveredDates == nil {
+		l.QueryLogCoverage.CoveredDates = make(map[string]int)
+	}
+	for date, cnt := range observedDates {
+		if cnt <= 0 || date == "" {
+			continue
+		}
+		if cnt > l.QueryLogCoverage.CoveredDates[date] {
+			l.QueryLogCoverage.CoveredDates[date] = cnt
+		}
+	}
 	if !earliest.IsZero() {
 		if l.QueryLogCoverage.EarliestTimestamp.IsZero() || earliest.Before(l.QueryLogCoverage.EarliestTimestamp) {
 			l.QueryLogCoverage.EarliestTimestamp = earliest
@@ -194,10 +249,59 @@ func (l *Ledger) UpdateQueryLogCoverage(earliest, latest time.Time, apiUser, rul
 			l.QueryLogCoverage.LatestTimestamp = latest
 		}
 	}
-	if !l.QueryLogCoverage.EarliestTimestamp.IsZero() && !l.QueryLogCoverage.LatestTimestamp.IsZero() {
-		span := l.QueryLogCoverage.LatestTimestamp.Sub(l.QueryLogCoverage.EarliestTimestamp)
+
+	windowEnd := now.UTC()
+	if windowEnd.IsZero() {
+		windowEnd = l.QueryLogCoverage.LatestTimestamp.UTC()
+	}
+
+	if len(l.QueryLogCoverage.CoveredDates) > 0 {
+		covered := 0
+		if window > 0 && !windowEnd.IsZero() {
+			startDay := windowEnd.Add(-window).UTC().Format("2006-01-02")
+			endDay := windowEnd.UTC().Format("2006-01-02")
+			for date, cnt := range l.QueryLogCoverage.CoveredDates {
+				if cnt > 0 && date >= startDay && date <= endDay {
+					covered++
+				}
+			}
+			maxDays := window.Hours() / 24.0
+			if window >= 24*time.Hour && float64(covered) > maxDays {
+				l.QueryLogCoverage.CoveredDays = maxDays
+			} else {
+				l.QueryLogCoverage.CoveredDays = float64(covered)
+			}
+		} else {
+			for _, cnt := range l.QueryLogCoverage.CoveredDates {
+				if cnt > 0 {
+					covered++
+				}
+			}
+			l.QueryLogCoverage.CoveredDays = float64(covered)
+		}
+	} else if !l.QueryLogCoverage.EarliestTimestamp.IsZero() && !l.QueryLogCoverage.LatestTimestamp.IsZero() {
+		// Backward-compatible fallback when neither ledger nor current run provides CoveredDates.
+		effStart := l.QueryLogCoverage.EarliestTimestamp
+		effEnd := l.QueryLogCoverage.LatestTimestamp
+		if window > 0 && !windowEnd.IsZero() {
+			windowStart := windowEnd.Add(-window)
+			if effEnd.Before(windowStart) {
+				l.QueryLogCoverage.CoveredDays = 0
+				effStart = effEnd
+			} else {
+				if effStart.Before(windowStart) {
+					effStart = windowStart
+				}
+				if effEnd.After(windowEnd) {
+					effEnd = windowEnd
+				}
+			}
+		}
+		span := effEnd.Sub(effStart)
 		if span >= 0 {
 			l.QueryLogCoverage.CoveredDays = span.Hours() / 24.0
+		} else {
+			l.QueryLogCoverage.CoveredDays = 0
 		}
 	}
 	l.QueryLogCoverage.APIUserQueries = apiUser
@@ -247,13 +351,14 @@ func (l *Ledger) LatestTranche() *TrancheRecord {
 }
 
 // RecordTrancheActivation records newly synthesized drops into ActiveDrops and appends/updates the tranche record.
-func (l *Ledger) RecordTrancheActivation(trancheNum int, now time.Time, soak time.Duration, recs []metrics.Recommendation) {
+func (l *Ledger) RecordTrancheActivation(trancheNum int, now time.Time, soak time.Duration, immediate bool, recs []metrics.Recommendation) {
 	var families []string
 	totalSeries := 0
 	for _, r := range recs {
 		families = append(families, r.FamilyName)
 		totalSeries += r.Series
 		if _, exists := l.ActiveDrops[r.FamilyName]; !exists {
+			members := append([]string(nil), r.Members...)
 			l.ActiveDrops[r.FamilyName] = &ActiveDropRecord{
 				FamilyName:   r.FamilyName,
 				Action:       r.Action,
@@ -261,10 +366,22 @@ func (l *Ledger) RecordTrancheActivation(trancheNum int, now time.Time, soak tim
 				Tranche:      trancheNum,
 				SeriesAtDrop: r.Series,
 				Reason:       r.Reason,
+				MetricType:   r.MetricType,
+				Members:      members,
+				NamingMode:   r.NamingMode,
+				OTLPName:     r.OTLPName,
 			}
 		}
 	}
 	sort.Strings(families)
+
+	status := "pending_confirmation"
+	var confirmedAt, soakUntil time.Time
+	if immediate {
+		status = "soaking"
+		confirmedAt = now
+		soakUntil = now.Add(soak)
+	}
 
 	// Avoid duplicating a tranche record if re-running inside the same active tranche.
 	if last := l.LatestTranche(); last != nil && last.Number == trancheNum {
@@ -273,13 +390,28 @@ func (l *Ledger) RecordTrancheActivation(trancheNum int, now time.Time, soak tim
 		return
 	}
 	l.Tranches = append(l.Tranches, TrancheRecord{
-		Number:    trancheNum,
-		StartedAt: now,
-		SoakUntil: now.Add(soak),
-		Status:    "active",
-		Families:  families,
-		Series:    totalSeries,
+		Number:      trancheNum,
+		StartedAt:   now,
+		ActivatedAt: now,
+		ConfirmedAt: confirmedAt,
+		SoakUntil:   soakUntil,
+		Status:      status,
+		Families:    families,
+		Series:      totalSeries,
 	})
 }
 
-func IntPtr(v int) *int { return &v }
+// ConfirmLatestTranche transitions a pending_confirmation tranche into soaking and starts its soak timer.
+func (l *Ledger) ConfirmLatestTranche(now time.Time, soak time.Duration) bool {
+	last := l.LatestTranche()
+	if last == nil || last.Status != "pending_confirmation" {
+		return false
+	}
+	last.Status = "soaking"
+	last.ConfirmedAt = now
+	last.SoakUntil = now.Add(soak)
+	return true
+}
+
+func IntPtr(v int) *int         { return &v }
+func Float64Ptr(v float64) *float64 { return &v }

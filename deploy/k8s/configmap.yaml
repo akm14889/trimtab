@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trimtab-config
+  labels:
+    app.kubernetes.io/name: trimtab
+data:
+  trimtab.yaml: |
+    name: prod-metrics
+    statePath: /var/lib/trimtab/.trimtab-state.json
+
+    inventory:
+      prometheusURL: https://prometheus.monitoring.svc:9090
+      tenantID: prod-tenant
+      tsdbLimit: 10000
+      auth:
+        bearerTokenEnv: TRIMTAB_PROM_TOKEN
+
+    usage:
+      queryLogs:
+        - loki:
+            url: https://loki.monitoring.svc:3100
+            tenantID: prod-tenant
+            query: '{component="query-frontend"}'
+            limit: 5000
+            maxPagesPerChunk: 100
+            auth:
+              headersEnv:
+                X-API-Key: TRIMTAB_LOKI_API_KEY
+      grafana:
+        url: https://grafana.monitoring.svc:3000
+        alertAPI: provisioning
+        auth:
+          bearerTokenEnv: TRIMTAB_GRAFANA_TOKEN
+
+    policy:
+      minObservationWindow: 30d
+      soakWindow: 7d
+      soakStartMode: observed
+      maxDropPercentPerTranche: 15.0
+      maxTotalDroppablePercent: 80.0
+      baselineDriftThresholdPercent: 20.0
+      queryLogBaselineDriftThresholdPercent: 50.0
+      wildcardThresholdPercent: 50.0
+      regretThreshold: 1
+
+    synthesizer:
+      target: alloy
+      alloy:
+        mode: module

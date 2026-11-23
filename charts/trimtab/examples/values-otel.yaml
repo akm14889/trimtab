@@ -1,0 +1,22 @@
+# OpenTelemetry Collector `filter` processor override.
+# Keeps `prometheus_receiver` naming by default; switch namingMode to `utf8_no_translation`
+# or `explicit_otlp` (+ otlpNameMap) for native OTLP pipelines.
+
+envFrom:
+  - secretRef:
+      name: trimtab-credentials
+
+config:
+  name: trimtab-otel
+  inventory:
+    prometheusURL: http://prometheus.monitoring.svc:9090
+    namingMode: prometheus_receiver
+  usage:
+    grafana:
+      url: http://grafana.monitoring.svc:80
+      auth:
+        bearerTokenEnv: GRAFANA_API_KEY
+  synthesizer:
+    target: otel
+    outputPath: /var/lib/trimtab/trimtab-otel-rules.yaml
+    alloy: null
