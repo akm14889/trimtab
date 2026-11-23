@@ -1,7 +1,7 @@
 # AGENT.md — Trimtab Project Guide
 
 > Read this file first in any new session, along with [docs/CHECKPOINT.md](docs/CHECKPOINT.md) for current build progress and resume instructions. It captures the architecture, non-negotiable safety invariants, synthesizer contracts, phased scope, and package map so you do not need to scan every file to get oriented.
-> Full rationale, examples, and diagrams live in [docs/DESIGN.md](docs/DESIGN.md).
+> Full rationale, examples, and diagrams live in [docs/DESIGN.md](docs/DESIGN.md); compatible backends & authentication live in [docs/BACKENDS_AND_AUTH.md](docs/BACKENDS_AND_AUTH.md); reusable session-trigger prompts live in [agent_work.md](agent_work.md).
 
 ---
 
@@ -22,7 +22,7 @@
   2. Usage sources: **Globbed Prometheus query logs** (`+ prom-analytics-proxy` + **Loki-backed query-log source**), **Grafana dashboards + Grafana-managed alerts** (API + local JSON), **Prometheus rule files** (with recording-rule transitive DAG).
   3. **Synthesizers:** **Grafana Alloy (`import.file` module)** (`pkg/synthesizer/alloy`), **OpenTelemetry Collector (`filter/trimtab` via `--config` insertion point)** (`pkg/synthesizer/otel`), AND **Prometheus `remote_write` (`write_relabel_configs` / `remote_write` / Operator patch)** (`pkg/synthesizer/promrw`).
   4. Screenshot-able CLI report (`trimtab analyze`, `trimtab synth`, `trimtab version`) in `table`, `markdown`, and `json` + bundled offline demo fixtures (`examples/demo/`, `make demo`, `make demo-otel`, `make demo-promrw`).
-- **Phase 2 (Remaining Build Targets — P2.2–P2.7 in [docs/PLAN.md](docs/PLAN.md)):** Additional usage sources (Mimir/Thanos Ruler API, KEDA, `prometheus-adapter`, Argo Rollouts/Flagger, Alertmanager, Perses, Sloth/Pyrra), per-team attribution & budgets ("OpenCost for telemetry"), GitOps PRs (tranched drops, dead rule cleanup, automated Regret Revert PRs), K8s Operator & CRDs (`trimtab.io/v1alpha1`), and multi-cluster scoping.
+- **Phase 2 (Remaining Build Targets — P2.1a–P2.7 in [docs/PLAN.md](docs/PLAN.md)):** GitHub PR CI & release pipeline (`P2.1a` — `.github/workflows`, GoReleaser, GHCR multi-arch images, `go 1.27`), safety-critical hardening (`P2.1b` — log-rotation survival, observation-only `analyze` + confirmed soak, per-expression wildcards), unified backend auth & live-scale hardening (`P2.1c` — `pkg/httpclient`, pagination, `trimtab doctor`), additional usage sources (Mimir/Thanos Ruler API, KEDA, `prometheus-adapter`, Argo Rollouts/Flagger, Alertmanager, Perses, Sloth/Pyrra), per-team attribution & budgets ("OpenCost for telemetry"), GitOps PRs (tranched drops, dead rule cleanup, automated Regret Revert PRs), K8s Operator & CRDs (`trimtab.io/v1alpha1`), and multi-cluster scoping.
 - **Phase 3 (Later):** Shard-safe aggregation synthesizer, direct Alloy config import add-on, Logs (`pkg/logs`), Traces (`pkg/traces`), OpAMP break-glass.
 
 ---
@@ -110,6 +110,7 @@ Never emit standalone snippets that cannot load in a real collector.
   8. `sum without (pod)`, bare `rate(x[5m])`, `label_replace`, Grafana `legendFormat`, alert `{{ $labels.x }}` ⇒ labels marked used.
   9. `le` and `quantile` ⇒ never suggested in advisory label drops; single-label `without (pod_uid)` honestly shows `0%` collapse when `pod` remains.
   10. `api-user` query hits a metric in `active_drops` ⇒ `RegretEvent` emitted, metric removed from drops & pinned to `neverDrop`, next tranche blocked.
+  - *Queued in `P2.1b` (`#11–#13`):* log-rotation survival & trailing `CoveredDates` bitmap, observation-only `analyze` + confirmed soak, and per-expression query-log wildcard detection.
 - **Living Plan & Checkpoint Convention:** Never create per-phase plan files (`PHASE2_PLAN.md`, `PHASE3_PLAN.md`, etc.). Append and refine all upcoming phases/sub-phases inside [docs/PLAN.md](docs/PLAN.md), and keep [docs/CHECKPOINT.md](docs/CHECKPOINT.md) updated after each completed sub-phase.
 - **Verification Command:** `go test -race ./... && go build ./cmd/trimtab`
 
