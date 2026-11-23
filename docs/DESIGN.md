@@ -4,6 +4,7 @@
 > **Status:** Phase 1 & Phase 1.1 Implemented (See [docs/CHECKPOINT.md](CHECKPOINT.md))
 > **Language:** Go
 > **Target Ecosystem:** Cloud Native / CNCF Observability (OpenTelemetry, Prometheus, Grafana Alloy, Mimir, Loki, OpenCost, Argo CD / Flux)
+> **Related Docs:** [Backends & Authentication](BACKENDS_AND_AUTH.md) | [Implementation Plan](PLAN.md) | [Checkpoint](CHECKPOINT.md)
 
 > *In naval architecture, a **trim tab** is a tiny control surface on a ship's rudder that steers a massive vessel with minimal force and zero drag. **Trimtab** applies the same principle to cloud-native observability: a lightweight, out-of-the-data-path control plane that audits real telemetry usage, rolls out safe tranched drops, detects post-drop regret, and steers telemetry pipelines via GitOps.*
 
@@ -35,6 +36,8 @@ Today, however, the observability optimization landscape is bifurcated:
 | **`prom-analytics-proxy`** | Optional plug-in runtime query-log source—users already running it feed live query analytics directly into Trimtab. |
 | **OpenCost** | Phase 2 exports per-team telemetry cardinality & cost metrics (`trimtab_team_*`) designed to sit beside OpenCost compute dashboards. |
 | **Argo CD / Flux** | Phase 2 opens auditable GitOps PRs (tranched drop rollouts + automated Regret Revert PRs) against machine-owned rule files; Argo CD/Flux handle safe rollout and drift. |
+
+For the full matrix of compatible Metrics, Logs, and Traces backends, read-only endpoints, and the Basic Auth / Bearer / Custom Header Auth / TLS connectivity model, see [Backends & Authentication Design](BACKENDS_AND_AUTH.md).
 
 ---
 
@@ -336,6 +339,7 @@ trimtab/
 ├── AGENT.md                     # High-signal guide for future coding/agent sessions
 ├── README.md                    # Quickstart, demo screenshot, insertion-point docs
 ├── docs/
+│   ├── BACKENDS_AND_AUTH.md     # Compatible Metrics/Logs/Traces backends & auth model
 │   └── DESIGN.md                # This architecture & design document
 ├── cmd/trimtab/                 # CLI entrypoint (`analyze`, `synth`, `version`)
 ├── pkg/
