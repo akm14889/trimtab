@@ -1,0 +1,150 @@
+controller:
+  type: deployment
+  replicas: 1
+  volumes:
+    extra:
+      - name: trimtab-rules
+        configMap:
+          name: trimtab-alloy-rules
+
+rbac:
+  create: true
+
+configReloader:
+  enabled: false
+
+alloy:
+  enableReporting: false
+  mounts:
+    varlog: false
+    dockercontainers: false
+    extra:
+      - name: trimtab-rules
+        mountPath: /etc/alloy/trimtab
+        readOnly: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  configMap:
+    create: true
+    content: |
+      import.file "trimtab" {
+        filename       = "/etc/alloy/trimtab/trimtab.alloy"
+        detector       = "poll"
+        poll_frequency = "5s"
+      }
+
+      trimtab.drop_unused "default" {
+        forward_to = [prometheus.remote_write.mimir.receiver]
+      }
+
+      discovery.kubernetes "noisy_app" {
+        role = "pod"
+        namespaces {
+          names = ["monitoring"]
+        }
+        selectors {
+          role  = "pod"
+          label = "app=noisy-app"
+        }
+      }
+
+      discovery.relabel "noisy_app" {
+        targets = discovery.kubernetes.noisy_app.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"]
+          regex         = "true"
+          action        = "keep"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_uid"]
+          target_label  = "pod_uid"
+        }
+        rule {
+          target_label = "job"
+          replacement  = "noisy-app"
+        }
+      }
+
+      prometheus.scrape "noisy_app" {
+        targets         = discovery.relabel.noisy_app.output
+        scrape_interval = "15s"
+        scrape_timeout  = "10s"
+        forward_to      = [trimtab.drop_unused.default.receiver]
+      }
+
+      prometheus.exporter.self "alloy" {}
+
+      prometheus.scrape "alloy_self" {
+        targets         = prometheus.exporter.self.alloy.targets
+        scrape_interval = "15s"
+        forward_to      = [trimtab.drop_unused.default.receiver]
+      }
+
+      prometheus.remote_write "mimir" {
+        endpoint {
+          url = "http://mimir.monitoring.svc.cluster.local:8080/api/v1/push"
+          headers = {
+            "X-Scope-OrgID" = "e2e",
+          }
+        }
+        wal {
+          truncate_frequency = "10m"
+        }
+      }
+
+      discovery.kubernetes "mimir_pods" {
+        role = "pod"
+        namespaces {
+          names = ["monitoring"]
+        }
+        selectors {
+          role  = "pod"
+          label = "app.kubernetes.io/name=mimir,component=query-frontend"
+        }
+      }
+
+      discovery.relabel "mimir_pods" {
+        targets = discovery.kubernetes.mimir_pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_component"]
+          target_label  = "component"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+      }
+
+      loki.source.kubernetes "mimir_logs" {
+        targets    = discovery.relabel.mimir_pods.output
+        forward_to = [loki.write.loki.receiver]
+      }
+
+      loki.write "loki" {
+        endpoint {
+          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }

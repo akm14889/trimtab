@@ -1,0 +1,73 @@
+{
+  "dashboard": {
+    "uid": "e2e-partial-labels",
+    "title": "E2E Partial Labels and Latency",
+    "description": "Dedicated partial-label & histogram bucket-only consumer verification dashboard",
+    "tags": ["e2e", "latency"],
+    "editable": true,
+    "schemaVersion": 39,
+    "version": 1,
+    "refresh": "15s",
+    "time": { "from": "now-30m", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "title": "HTTP Duration (Unused pod, pod_uid, request_id)",
+        "type": "timeseries",
+        "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "mimir" },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum by (le, route) (rate(e2e_labels_http_duration_seconds_bucket[5m]))",
+            "legendFormat": "{{route}}"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Average Latency (_sum / _count only)",
+        "type": "timeseries",
+        "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "mimir" },
+        "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum by (route) (rate(e2e_latency_seconds_sum[5m])) / sum by (route) (rate(e2e_latency_seconds_count[5m]))",
+            "legendFormat": "{{route}}"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Scalar Binary Comparison Precision",
+        "type": "timeseries",
+        "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "mimir" },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum by (job) (rate(e2e_scalar_cmp_total[5m]) > 0)",
+            "legendFormat": "{{job}}"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Recording Rule Live Rate",
+        "type": "timeseries",
+        "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+        "datasource": { "type": "prometheus", "uid": "mimir" },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum by (service) (e2e:rr_live:rate5m)",
+            "legendFormat": "{{service}}"
+          }
+        ]
+      }
+    ]
+  },
+  "overwrite": true
+}

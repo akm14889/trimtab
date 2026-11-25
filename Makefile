@@ -1,7 +1,7 @@
 BINARY := bin/trimtab
 DEMO_NOW := 2026-11-21T12:00:00Z
 
-.PHONY: build test lint verify helm-lint demo demo-otel demo-promrw demo-markdown clean kind-up kind-down kind-smoke tilt-up
+.PHONY: build test lint verify helm-lint demo demo-otel demo-promrw demo-markdown clean kind-up kind-down kind-smoke tilt-up e2e-up e2e-build e2e-deploy e2e-seed e2e-test e2e-scenario e2e-artifacts e2e-down e2e-all
 
 build:
 	go build -o $(BINARY) ./cmd/trimtab
@@ -53,6 +53,34 @@ kind-smoke:
 
 tilt-up:
 	tilt up
+
+e2e-up:
+	./test/e2e/e2e.sh up
+
+e2e-build:
+	./test/e2e/e2e.sh build
+
+e2e-deploy:
+	./test/e2e/e2e.sh deploy
+
+e2e-seed:
+	./test/e2e/e2e.sh seed
+
+e2e-test:
+	./test/e2e/e2e.sh test
+
+e2e-scenario:
+	@test -n "$(S)" || (echo "Usage: make e2e-scenario S=S0" >&2; exit 2)
+	./test/e2e/e2e.sh scenario "$(S)"
+
+e2e-artifacts:
+	./test/e2e/e2e.sh artifacts
+
+e2e-down:
+	./test/e2e/e2e.sh down
+
+e2e-all:
+	./test/e2e/e2e.sh all
 
 clean:
 	rm -rf bin/ trimtab out/ dist/ examples/demo/out/ examples/demo/.trimtab-state*.json

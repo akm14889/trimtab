@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: noisy-app
+  namespace: monitoring
+  labels:
+    app: noisy-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: noisy-app
+  template:
+    metadata:
+      labels:
+        app: noisy-app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: noisy-app
+          image: trimtab-e2e-noisy-app:e2e
+          imagePullPolicy: Never
+          ports:
+            - name: metrics
+              containerPort: 8080
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: ENABLE_NEW_METRIC
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 20m
+              memory: 24Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

@@ -1,0 +1,10 @@
+name: e2e-alerts
+interval: 15s
+rules:
+  - alert: E2EAlertOnlyHigh
+    expr: sum by (service) (e2e_alert_only_gauge) > 50
+    for: 1m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High queue depth on {{ $labels.service }}"

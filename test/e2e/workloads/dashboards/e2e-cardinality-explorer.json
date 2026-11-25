@@ -1,0 +1,31 @@
+{
+  "dashboard": {
+    "uid": "e2e-cardinality-explorer",
+    "title": "E2E Cardinality Explorer",
+    "description": "Wildcard explorer fixture ({__name__=~\".+\"}) excluded via excludeSources in S4",
+    "tags": ["e2e", "explorer"],
+    "editable": true,
+    "schemaVersion": 39,
+    "version": 1,
+    "refresh": "30s",
+    "time": { "from": "now-15m", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Top Series by Metric Name (Wildcard Explorer)",
+        "type": "table",
+        "gridPos": { "x": 0, "y": 0, "w": 24, "h": 14 },
+        "datasource": { "type": "prometheus", "uid": "mimir" },
+        "targets": [
+          {
+            "refId": "A",
+            "instant": true,
+            "format": "table",
+            "expr": "topk(20, count by (__name__) ({__name__=~\".+\"}))"
+          }
+        ]
+      }
+    ]
+  },
+  "overwrite": true
+}

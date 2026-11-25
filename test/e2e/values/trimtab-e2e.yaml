@@ -1,0 +1,104 @@
+image:
+  repository: trimtab
+  tag: e2e
+  pullPolicy: Never
+
+cronjob:
+  schedule: "*/2 * * * *"
+  suspend: true
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  reportFormat: json
+  noStateWrite: false
+  extraArgs: []
+
+doctorTest:
+  enabled: true
+  format: json
+
+persistence:
+  enabled: true
+  size: 256Mi
+  mountPath: /var/lib/trimtab
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+
+envFrom:
+  - secretRef:
+      name: trimtab-credentials
+
+config:
+  name: trimtab-e2e
+  statePath: /var/lib/trimtab/.trimtab-state.json
+
+  inventory:
+    prometheusURL: http://mimir.monitoring.svc.cluster.local:8080/prometheus
+    tenantID: e2e
+    tsdbLimit: 10000
+    probeFirstSeen: false
+    timeout: 30s
+    enableCollapseQueries: true
+    maxCollapseFamilies: 50
+    namingMode: prometheus_receiver
+
+  usage:
+    queryLogs:
+      - loki:
+          url: http://loki.monitoring.svc.cluster.local:3100
+          query: '{namespace="monitoring", component="query-frontend"}'
+          window: 20m
+          chunkSize: 1h
+          limit: 5000
+          maxPagesPerChunk: 50
+          timeout: 30s
+
+    grafana:
+      url: http://grafana.monitoring.svc.cluster.local:80
+      alertAPI: provisioning
+      enableManagedAlerts: true
+      timeout: 30s
+      auth:
+        bearerTokenEnv: GRAFANA_API_KEY
+
+    rulers:
+      - type: mimir
+        url: http://mimir.monitoring.svc.cluster.local:8080
+        tenantID: e2e
+        timeout: 30s
+
+  policy:
+    minObservationWindow: 20m
+    soakWindow: 5m
+    soakStartMode: observed
+    confirmationMaxRemainingPercent: 0
+    maxDropPercentPerTranche: 15
+    maxTotalDroppablePercent: 80
+    baselineDriftThresholdPercent: 20
+    queryLogBaselineDriftThresholdPercent: 50
+    wildcardThresholdPercent: 50
+    regretThreshold: 1
+    neverDrop: []
+    disableDefaultNeverDrop: false
+    excludeSources:
+      - type: dashboard_uid
+        value: e2e-cardinality-explorer
+      - type: query_caller
+        value: explorer
+      - type: query_regex
+        value: '^count by \(__name__\) \(\{__name__=~"\.\+"\}\)$'
+      - type: query_regex
+        value: '^topk\(20, count by \(__name__\) \(\{__name__=~"\.\+"\}\)\)$'
+
+  synthesizer:
+    target: alloy
+    outputPath: /var/lib/trimtab/trimtab.alloy
+    alloy:
+      mode: module
+      maxTermsPerRule: 250

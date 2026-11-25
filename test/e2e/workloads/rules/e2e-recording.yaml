@@ -1,0 +1,9 @@
+name: e2e-recording
+interval: 15s
+rules:
+  - record: e2e:rr_live:rate5m
+    expr: sum by (service) (rate(e2e_rr_source_total[5m]))
+  - record: e2e:rr_dead:rate5m
+    expr: sum by (service) (rate(e2e_rr_dead_source_total[5m]))
+  - record: e2e:rr_dead:sum
+    expr: sum(e2e:rr_dead:rate5m) or vector(0)

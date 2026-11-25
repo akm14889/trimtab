@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-gen
+  namespace: monitoring
+  labels:
+    app: traffic-gen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-gen
+  template:
+    metadata:
+      labels:
+        app: traffic-gen
+    spec:
+      containers:
+        - name: traffic-gen
+          image: trimtab-e2e-traffic-gen:e2e
+          imagePullPolicy: Never
+          env:
+            - name: MIMIR_URL
+              value: "http://mimir.monitoring.svc.cluster.local:8080/prometheus"
+            - name: TENANT_ID
+              value: "e2e"
+            - name: REGRET_MODE
+              value: "false"
+            - name: ROTATION_ACTIVE
+              value: "true"
+          resources:
+            requests:
+              cpu: 20m
+              memory: 24Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
