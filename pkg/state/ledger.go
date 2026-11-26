@@ -52,15 +52,16 @@ type SeenFamily struct {
 
 // TrancheRecord tracks rollout state and soak window per tranche (Invariant #3).
 type TrancheRecord struct {
-	Number            int       `json:"number"`
-	StartedAt         time.Time `json:"started_at"`
-	ActivatedAt       time.Time `json:"activated_at,omitempty"`
-	ConfirmedAt       time.Time `json:"confirmed_at,omitempty"`
-	SoakUntil         time.Time `json:"soak_until,omitempty"`
-	Status            string    `json:"status"` // "pending_confirmation", "soaking", "soaked", "blocked_regret" (legacy: "active")
-	Families          []string  `json:"families"`
-	Series            int       `json:"series"`
-	UnresolvedRegrets int       `json:"unresolved_regrets"`
+	Number                int       `json:"number"`
+	StartedAt             time.Time `json:"started_at"`
+	ActivatedAt           time.Time `json:"activated_at,omitempty"`
+	ConfirmedAt           time.Time `json:"confirmed_at,omitempty"`
+	SoakUntil             time.Time `json:"soak_until,omitempty"`
+	Status                string    `json:"status"` // "pending_confirmation", "soaking", "soaked", "blocked_regret" (legacy: "active")
+	Families              []string  `json:"families"`
+	Series                int       `json:"series"`
+	UnresolvedRegrets     int       `json:"unresolved_regrets"`
+	PendingRevertFamilies []string  `json:"pending_revert_families,omitempty"`
 }
 
 // ActiveDropRecord tracks an actively dropped metric family for Regret Detection (Invariant #10).
@@ -255,7 +256,27 @@ func (l *Ledger) UpdateQueryLogCoverage(
 		windowEnd = l.QueryLogCoverage.LatestTimestamp.UTC()
 	}
 
-	if len(l.QueryLogCoverage.CoveredDates) > 0 {
+	if window > 0 && window <= 24*time.Hour && !l.QueryLogCoverage.EarliestTimestamp.IsZero() && !l.QueryLogCoverage.LatestTimestamp.IsZero() {
+		// For sub-day and 1-day observation windows, track continuous elapsed timestamp
+		// coverage rather than distinct UTC calendar dates (which jump to 1.0 on the first log line).
+		effStart := l.QueryLogCoverage.EarliestTimestamp
+		effEnd := l.QueryLogCoverage.LatestTimestamp
+		if !windowEnd.IsZero() && effEnd.Before(windowEnd.Add(-window)) {
+			l.QueryLogCoverage.CoveredDays = 0
+		} else {
+			if !windowEnd.IsZero() && effEnd.After(windowEnd) {
+				effEnd = windowEnd
+			}
+			span := effEnd.Sub(effStart)
+			if span < 0 {
+				span = 0
+			}
+			if span > window {
+				span = window
+			}
+			l.QueryLogCoverage.CoveredDays = span.Hours() / 24.0
+		}
+	} else if len(l.QueryLogCoverage.CoveredDates) > 0 {
 		covered := 0
 		if window > 0 && !windowEnd.IsZero() {
 			startDay := windowEnd.Add(-window).UTC().Format("2006-01-02")
@@ -339,7 +360,38 @@ func (l *Ledger) RecordRegret(ev metrics.RegretEvent) {
 		last := &l.Tranches[len(l.Tranches)-1]
 		last.UnresolvedRegrets++
 		last.Status = "blocked_regret"
+		addUniqueSorted(&last.PendingRevertFamilies, ev.FamilyName)
 	}
+}
+
+// ResolveLatestTrancheRegrets clears unresolved regret blocks on the latest tranche and restores
+// its operational status (soaking, soaked, or pending_confirmation).
+func (l *Ledger) ResolveLatestTrancheRegrets(now time.Time) bool {
+	last := l.LatestTranche()
+	if last == nil || (last.UnresolvedRegrets == 0 && last.Status != "blocked_regret" && len(last.PendingRevertFamilies) == 0) {
+		return false
+	}
+	last.UnresolvedRegrets = 0
+	last.PendingRevertFamilies = nil
+	switch {
+	case !last.SoakUntil.IsZero() && now.Before(last.SoakUntil):
+		last.Status = "soaking"
+	case !last.ConfirmedAt.IsZero() || len(l.ActiveDrops) == 0:
+		last.Status = "soaked"
+	default:
+		last.Status = "pending_confirmation"
+	}
+	return true
+}
+
+func addUniqueSorted(dst *[]string, val string) {
+	for _, existing := range *dst {
+		if existing == val {
+			return
+		}
+	}
+	*dst = append(*dst, val)
+	sort.Strings(*dst)
 }
 
 // LatestTranche returns the most recently activated tranche record, or nil if none.

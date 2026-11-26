@@ -66,6 +66,9 @@ helm upgrade --install trimtab ./charts/trimtab \
   -f my-values.yaml
 ```
 
+> [!NOTE]
+> On clusters whose default `StorageClass` uses `volumeBindingMode: WaitForFirstConsumer` (such as Kind's `rancher.io/local-path`, AWS `ebs-sc`, or GKE `standard-rwo`), the `trimtab-state` PVC stays `Pending` until a Pod mounts it. Because this chart schedules a `CronJob` rather than an always-on Deployment, omit `--wait` during `helm upgrade --install` (especially under Helm v4) and run `helm test` or trigger an immediate manual Job (`kubectl create job --from=cronjob/trimtab ...`) to bind the volume.
+
 ### 3. Verify connectivity with `helm test`
 
 ```bash

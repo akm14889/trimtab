@@ -1829,3 +1829,246 @@ func TestSafetyMatrix_P23_AlertmanagerPersesAndSLO(t *testing.T) {
 		}
 	})
 }
+
+func TestE2ERegressionFindings(t *testing.T) {
+	t.Run("F2 sub-day 20m and 1d cold-start stay ReportOnly with ProjectedDrops", func(t *testing.T) {
+		now := time.Date(2026, 11, 25, 18, 1, 0, 0, time.UTC)
+		cfg := config.DefaultConfig()
+		cfg.Inventory.FixturePath = "fixture.json"
+		cfg.Policy.MinObservationWindow = config.Duration(20 * time.Minute)
+
+		inv := &prometheus.InventorySnapshot{
+			MetricNames:  []string{"live_m", "unused_m"},
+			SeriesCounts: map[string]int{"live_m": 800, "unused_m": 200},
+			FirstSeenHints: map[string]time.Time{
+				"live_m":   now.Add(-time.Minute),
+				"unused_m": now.Add(-time.Minute),
+			},
+		}
+		ex, _ := promql.Extract("live_m")
+		shortQL := &querylog.Result{
+			Configured:        true,
+			RequestedWindow:   20 * time.Minute,
+			EarliestTimestamp: now.Add(-time.Minute),
+			LatestTimestamp:   now,
+			ObservedDates:     map[string]int{"2026-11-25": 50},
+			TotalEntries:      50,
+			APIUserCount:      50,
+			Refs: []metrics.UsageRef{{
+				MetricName:   "live_m",
+				Origin:       metrics.OriginAPIUser,
+				SourceID:     "querylog:api-user",
+				Timestamp:    now,
+				PreservesAll: ex.Accesses[0].PreservesAll,
+			}},
+		}
+
+		rep, err := Analyze(context.Background(), AnalyzeInput{
+			Config: cfg, Ledger: state.NewLedger(), Inventory: inv, QueryLog: shortQL,
+			Capabilities: alloyCaps(), Now: now, ActivateNextTranche: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rep.Safety.ReportOnly || rep.Summary.Confidence != metrics.ConfidenceMedium {
+			t.Fatalf("expected ReportOnly=true & MEDIUM confidence on 1m/20m cold start, got %+v %s", rep.Safety, rep.Summary.Confidence)
+		}
+		if rep.Summary.SynthesizedFamilies != 0 || len(rep.ActiveDrops) != 0 {
+			t.Fatalf("expected 0 active drops on cold start, got %d", len(rep.ActiveDrops))
+		}
+		if len(rep.ProjectedDrops) != 1 || rep.ProjectedDrops[0].FamilyName != "unused_m" {
+			t.Fatalf("expected ProjectedDrops=[unused_m] during cold start, got %+v", rep.ProjectedDrops)
+		}
+	})
+
+	t.Run("F5 narrowing Loki window keeps constant daily rate without false drift", func(t *testing.T) {
+		now := time.Date(2026, 11, 25, 18, 30, 0, 0, time.UTC)
+		old := now.Add(-time.Hour)
+		cfg := config.DefaultConfig()
+		cfg.Inventory.FixturePath = "fixture.json"
+		cfg.Policy.MinObservationWindow = config.Duration(20 * time.Minute)
+
+		inv := &prometheus.InventorySnapshot{
+			MetricNames:    []string{"live_m", "dead_m"},
+			SeriesCounts:   map[string]int{"live_m": 800, "dead_m": 200},
+			FirstSeenHints: map[string]time.Time{"live_m": old, "dead_m": old},
+		}
+		ex, _ := promql.Extract("live_m")
+		mkQL := func(win time.Duration, apiEntries, exclEntries int) *querylog.Result {
+			return &querylog.Result{
+				Configured:        true,
+				RequestedWindow:   win,
+				EarliestTimestamp: now.Add(-win),
+				LatestTimestamp:   now,
+				ObservedDates:     map[string]int{"2026-11-25": apiEntries + exclEntries},
+				TotalEntries:      apiEntries + exclEntries,
+				APIUserCount:      apiEntries,
+				ExcludedCount:     exclEntries,
+				Refs: []metrics.UsageRef{{
+					MetricName:   "live_m",
+					Origin:       metrics.OriginAPIUser,
+					SourceID:     "querylog:api-user",
+					Timestamp:    now,
+					PreservesAll: ex.Accesses[0].PreservesAll,
+				}},
+			}
+		}
+
+		ledger := state.NewLedger()
+		// 20m window with heavy Trimtab ExcludedCount burst (800 self-queries + 400 api-user)
+		if _, err := Analyze(context.Background(), AnalyzeInput{
+			Config: cfg, Ledger: ledger, Inventory: inv, QueryLog: mkQL(20*time.Minute, 400, 800),
+			Capabilities: alloyCaps(), Now: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// 5m window at steady API-user QPS (100 api-user + 2 excluded) MUST NOT trip baseline drift!
+		rep5m, err := Analyze(context.Background(), AnalyzeInput{
+			Config: cfg, Ledger: ledger, Inventory: inv, QueryLog: mkQL(5*time.Minute, 100, 2),
+			Capabilities: alloyCaps(), Now: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep5m.Safety.BaselineDriftDetected {
+			t.Fatalf("narrowing window 20m -> 5m at steady QPS (with earlier ExcludedCount burst) must not trip baseline drift: %v", rep5m.Safety.BaselineDriftDetails)
+		}
+
+		// Real API queries dropping to 0 (even if self/excluded queries exist) MUST still trip -100% baseline drift!
+		repExclOnly, err := Analyze(context.Background(), AnalyzeInput{
+			Config: cfg, Ledger: ledger, Inventory: inv,
+			QueryLog: &querylog.Result{
+				Configured:      true,
+				RequestedWindow: 20 * time.Minute,
+				ObservedDates:   map[string]int{"2026-11-25": 200},
+				TotalEntries:    200,
+				ExcludedCount:   200,
+			},
+			Capabilities: alloyCaps(), Now: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !repExclOnly.Safety.BaselineDriftDetected || !repExclOnly.Safety.Blocked {
+			t.Fatalf("expected 0 api/rule queries (excluded-only) to trip drift guard, got %+v", repExclOnly.Safety)
+		}
+
+		// Outage (0 entries) MUST still trip -100% baseline drift!
+		repOutage, err := Analyze(context.Background(), AnalyzeInput{
+			Config: cfg, Ledger: ledger, Inventory: inv,
+			QueryLog: &querylog.Result{Configured: true, RequestedWindow: 20 * time.Minute},
+			Capabilities: alloyCaps(), Now: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !repOutage.Safety.BaselineDriftDetected || !repOutage.Safety.Blocked {
+			t.Fatalf("expected 0-entry query-log outage to trip drift guard, got %+v", repOutage.Safety)
+		}
+	})
+
+	t.Run("F4 and F7.5 regret revert lifecycle and 0-series exclusion", func(t *testing.T) {
+		now := time.Date(2026, 11, 25, 19, 0, 0, 0, time.UTC)
+		old := now.Add(-time.Hour)
+		cfg := config.DefaultConfig()
+		cfg.Inventory.FixturePath = "fixture.json"
+		cfg.Policy.MinObservationWindow = config.Duration(20 * time.Minute)
+		cfg.Policy.SoakWindow = config.Duration(time.Minute)
+
+		inv := &prometheus.InventorySnapshot{
+			MetricNames:  []string{"live_m", "dead_m", "ghost_zero_series"},
+			SeriesCounts: map[string]int{"live_m": 800, "dead_m": 100, "ghost_zero_series": 0},
+			FirstSeenHints: map[string]time.Time{
+				"live_m": old, "dead_m": old, "ghost_zero_series": old,
+			},
+		}
+		ledger := state.NewLedger()
+		ledger.RecordTrancheActivation(1, now.Add(-2*time.Minute), time.Minute, true, []metrics.Recommendation{
+			{FamilyName: "victim_m", Action: metrics.ActionDropFamily, Series: 50},
+		})
+
+		exLive, _ := promql.Extract("live_m")
+		exVic, _ := promql.Extract("victim_m")
+		ql := &querylog.Result{
+			Configured:        true,
+			RequestedWindow:   20 * time.Minute,
+			EarliestTimestamp: now.Add(-20 * time.Minute),
+			LatestTimestamp:   now,
+			ObservedDates:     map[string]int{"2026-11-25": 20},
+			TotalEntries:      20,
+			APIUserCount:      20,
+			Entries: []querylog.QueryLogEntry{{
+				Query:     "victim_m",
+				Timestamp: now.Add(-30 * time.Second),
+				Origin:    metrics.OriginAPIUser,
+				Accesses:  exVic.Accesses,
+			}},
+			Refs: []metrics.UsageRef{{
+				MetricName: "live_m", Origin: metrics.OriginAPIUser, SourceID: "querylog:api-user",
+				Timestamp: now, PreservesAll: exLive.Accesses[0].PreservesAll,
+			}},
+		}
+
+		// Regret fires: sets PendingRevertFamilies=[victim_m]; ghost_zero_series must NOT enter tranches!
+		repReg, err := Analyze(context.Background(), AnalyzeInput{
+			Config: cfg, Ledger: ledger, Inventory: inv, QueryLog: ql, Capabilities: alloyCaps(), Now: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(repReg.Regrets) != 1 || len(repReg.Safety.PendingRevertFamilies) != 1 || repReg.Safety.PendingRevertFamilies[0] != "victim_m" {
+			t.Fatalf("expected regret + PendingRevertFamilies=[victim_m], got regrets=%+v pending=%v", repReg.Regrets, repReg.Safety.PendingRevertFamilies)
+		}
+		for _, tr := range repReg.Tranches {
+			for _, it := range tr.Items {
+				if it.FamilyName == "ghost_zero_series" {
+					t.Fatal("0-series historical family must never enter drop tranches")
+				}
+			}
+		}
+
+		// Telemetry returns in inventory -> PendingRevertFamilies clears automatically, while blocked_regret awaits --resolve-regret.
+		invRestored := &prometheus.InventorySnapshot{
+			MetricNames:    []string{"live_m", "dead_m", "victim_m"},
+			SeriesCounts:   map[string]int{"live_m": 800, "dead_m": 100, "victim_m": 50},
+			FirstSeenHints: map[string]time.Time{"live_m": old, "dead_m": old, "victim_m": old},
+		}
+		qlClean := &querylog.Result{
+			Configured:        true,
+			RequestedWindow:   20 * time.Minute,
+			EarliestTimestamp: now.Add(-20 * time.Minute),
+			LatestTimestamp:   now,
+			ObservedDates:     map[string]int{"2026-11-25": 20},
+			TotalEntries:      20,
+			APIUserCount:      20,
+			Refs: []metrics.UsageRef{{
+				MetricName: "live_m", Origin: metrics.OriginAPIUser, SourceID: "querylog:api-user",
+				Timestamp: now, PreservesAll: exLive.Accesses[0].PreservesAll,
+			}},
+		}
+		repPostRevert, err := Analyze(context.Background(), AnalyzeInput{
+			Config: cfg, Ledger: ledger, Inventory: invRestored, QueryLog: qlClean, Capabilities: alloyCaps(), Now: now.Add(30 * time.Second),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(repPostRevert.Safety.PendingRevertFamilies) != 0 || repPostRevert.Safety.ActiveTrancheStatus != "blocked_regret" {
+			t.Fatalf("expected PendingRevertFamilies cleared while still blocked_regret, got %+v", repPostRevert.Safety)
+		}
+
+		// --resolve-regret clears UnresolvedRegrets and unblocks status while victim_m stays pinned.
+		repResolved, err := Analyze(context.Background(), AnalyzeInput{
+			Config: cfg, Ledger: ledger, Inventory: invRestored, QueryLog: qlClean, Capabilities: alloyCaps(),
+			Now: now.Add(time.Minute), ResolveRegret: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if repResolved.Safety.UnresolvedRegrets != 0 || repResolved.Safety.ActiveTrancheStatus == "blocked_regret" {
+			t.Fatalf("expected regret resolved, got %+v", repResolved.Safety)
+		}
+		if !ledger.IsPinnedNeverDrop("victim_m") {
+			t.Fatal("victim_m must remain pinned to neverDrop")
+		}
+	})
+}

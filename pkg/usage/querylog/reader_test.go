@@ -313,3 +313,80 @@ func TestLokiPaginationParamQuerySelfExclusionAndStreamingDedup(t *testing.T) {
 		}
 	})
 }
+
+func TestMimirRealLogfmtParsingAndExclusions(t *testing.T) {
+	t0 := time.Date(2026, 11, 25, 18, 0, 42, 0, time.UTC)
+	lines := [][2]string{
+		// F1: unquoted single-token param_query and param_match[]
+		{strconv.FormatInt(t0.UnixNano(), 10), `ts=2026-11-25T18:00:42Z caller=handler.go:430 level=info user=e2e msg="query stats" user_agent=autoscaler/keda-standin-1.0 param_query=e2e_autoscaler_metric header_user_agent=autoscaler/keda-standin-1.0 header_x_scope_orgid=e2e status=success`},
+		{strconv.FormatInt(t0.Add(time.Second).UnixNano(), 10), `ts=2026-11-25T18:00:43Z caller=handler.go:430 level=info user=e2e msg="query stats" user_agent=Grafana/12.3.1 param_query=count(e2e:rr_live:rate5m) status=success`},
+		{strconv.FormatInt(t0.Add(2*time.Second).UnixNano(), 10), `ts=2026-11-25T18:00:44Z caller=handler.go:430 level=info user=e2e msg="query stats" user_agent=curl/8.11.1 param_match[]=e2e_series_probe_gauge status=success`},
+		// F3a: slow query detected omits user_agent= and only logs header_user_agent=
+		{strconv.FormatInt(t0.Add(3*time.Second).UnixNano(), 10), `ts=2026-11-25T18:00:45Z caller=handler.go:315 level=info user=e2e msg="slow query detected" method=GET path=/prometheus/api/v1/query time_taken=3.14ms param_query="count(count without (shard) (e2e_unused_big_gauge))" header_cache_control= header_user_agent=trimtab/v0.0.1-beta.3-e2e header_x_scope_orgid=e2e`},
+		// F3b: caller=handler.go:430 must NOT shadow user_agent=explorer/... for query_caller exclusions
+		{strconv.FormatInt(t0.Add(4*time.Second).UnixNano(), 10), `ts=2026-11-25T18:00:46Z caller=handler.go:430 level=info user=e2e msg="query stats" user_agent=explorer/cardinality-audit-1.0 param_query="count by (__name__) ({__name__=~\".+\"})" status=success`},
+		// F3c: header_x_dashboard_uid= must be extracted and matched by dashboard_uid exclusions
+		{strconv.FormatInt(t0.Add(5*time.Second).UnixNano(), 10), `ts=2026-11-25T18:00:47Z caller=handler.go:430 level=info user=e2e msg="query stats" user_agent=Grafana/12.3.1 param_query="topk(20, count by (__name__) ({__name__=~\".+\"}))" header_user_agent=Grafana/12.3.1 header_x_dashboard_uid=e2e-cardinality-explorer header_x_grafana_user=admin status=success`},
+		// F3c: non-excluded Grafana query preserves DashboardUID and resolves ClientCaller to User-Agent (not handler.go:430)
+		{strconv.FormatInt(t0.Add(6*time.Second).UnixNano(), 10), `ts=2026-11-25T18:00:48Z caller=handler.go:430 level=info user=e2e msg="query stats" user_agent=Grafana/12.3.1 param_query="sum by (job) (rate(e2e_used_requests_total[5m]))" header_x_dashboard_uid=e2e-overview status=success`},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data": map[string]any{
+				"resultType": "streams",
+				"result": []any{
+					map[string]any{"stream": map[string]string{"component": "query-frontend"}, "values": lines},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	res, err := ReadSources(
+		context.Background(),
+		[]config.QueryLogSourceConfig{{
+			Loki: &config.LokiQueryLogConfig{
+				URL:       srv.URL,
+				Query:     `{component="query-frontend"}`,
+				Window:    config.Duration(20 * time.Minute),
+				ChunkSize: config.Duration(time.Hour),
+			},
+		}},
+		[]config.ExcludeSource{
+			{Type: "query_caller", Value: "explorer"},
+			{Type: "dashboard_uid", Value: "e2e-cardinality-explorer"},
+		},
+		20*time.Minute,
+		t0.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("ReadSources failed: %v", err)
+	}
+	if res.RequestedWindow != 20*time.Minute {
+		t.Errorf("RequestedWindow = %v, want 20m", res.RequestedWindow)
+	}
+	if res.TotalEntries != 7 || res.APIUserCount != 4 || res.ExcludedCount != 3 {
+		t.Fatalf("unexpected counts: total=%d api=%d excluded=%d", res.TotalEntries, res.APIUserCount, res.ExcludedCount)
+	}
+
+	seen := map[string]metrics.UsageRef{}
+	for _, ref := range res.Refs {
+		seen[ref.MetricName] = ref
+	}
+	for _, want := range []string{"e2e_autoscaler_metric", "e2e:rr_live:rate5m", "e2e_series_probe_gauge", "e2e_used_requests_total"} {
+		if _, ok := seen[want]; !ok {
+			t.Errorf("missing expected parsed metric %q in %+v", want, seen)
+		}
+	}
+	if _, leaked := seen["e2e_unused_big_gauge"]; leaked {
+		t.Fatal("slow-query trimtab/ header_user_agent must be auto-excluded")
+	}
+	if ref := seen["e2e_used_requests_total"]; ref.DashboardUID != "e2e-overview" || ref.ClientCaller != "Grafana/12.3.1" {
+		t.Errorf("unexpected Grafana ref metadata: dashboardUID=%q clientCaller=%q", ref.DashboardUID, ref.ClientCaller)
+	}
+	if ref := seen["e2e_autoscaler_metric"]; ref.ClientCaller != "autoscaler/keda-standin-1.0" {
+		t.Errorf("expected ClientCaller=autoscaler/keda-standin-1.0 (not handler.go:430), got %q", ref.ClientCaller)
+	}
+}

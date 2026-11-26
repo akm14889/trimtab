@@ -165,3 +165,57 @@ func TestLoadV1LedgerBackwardCompatAndTrailingBitmap(t *testing.T) {
 		t.Fatalf("CoveredDays = %v, want 10 for gapped trailing window", l2.QueryLogCoverage.CoveredDays)
 	}
 }
+
+func TestSubDayAndOneDayCoverageAndRegretResolution(t *testing.T) {
+	now := time.Date(2026, 11, 25, 18, 25, 0, 0, time.UTC)
+
+	// F2: 1 minute of query logs MUST NOT satisfy a 20m or 1d observation window even though CoveredDates has 1 UTC date.
+	l := NewLedger()
+	dates := map[string]int{"2026-11-25": 83}
+	l.UpdateQueryLogCoverage(dates, now.Add(-time.Minute), now, 83, 0, 2, now, 20*time.Minute)
+	if req := (20 * time.Minute).Hours() / 24.0; l.QueryLogCoverage.CoveredDays >= req {
+		t.Fatalf("1m span must be < 20m required (%v), got CoveredDays=%v", req, l.QueryLogCoverage.CoveredDays)
+	}
+
+	// Same 1m span on 1d window also stays < 1.0 day.
+	lOneDay := NewLedger()
+	lOneDay.UpdateQueryLogCoverage(dates, now.Add(-time.Minute), now, 83, 0, 0, now, 24*time.Hour)
+	if lOneDay.QueryLogCoverage.CoveredDays >= 1.0 {
+		t.Fatalf("1m span must be < 1d, got CoveredDays=%v", lOneDay.QueryLogCoverage.CoveredDays)
+	}
+
+	// Once 20m of span elapses, CoveredDays equals 20m in days.
+	l.UpdateQueryLogCoverage(dates, now.Add(-20*time.Minute), now, 200, 0, 4, now, 20*time.Minute)
+	want20m := (20 * time.Minute).Hours() / 24.0
+	if l.QueryLogCoverage.CoveredDays < want20m-1e-9 || l.QueryLogCoverage.CoveredDays > want20m+1e-9 {
+		t.Fatalf("20m span CoveredDays = %v, want %v", l.QueryLogCoverage.CoveredDays, want20m)
+	}
+
+	// F4: RecordRegret tracks PendingRevertFamilies and ResolveLatestTrancheRegrets clears block cleanly.
+	l.RecordTrancheActivation(1, now.Add(-10*time.Minute), 15*time.Minute, true, []metrics.Recommendation{
+		{FamilyName: "victim_a", Action: metrics.ActionDropFamily, Series: 100},
+		{FamilyName: "other_b", Action: metrics.ActionDropFamily, Series: 50},
+	})
+	l.RecordRegret(metrics.RegretEvent{
+		FamilyName: "victim_a",
+		DetectedAt: now,
+		Query:      "victim_a",
+		HitCount:   1,
+	})
+	tr := l.LatestTranche()
+	if tr == nil || tr.Status != "blocked_regret" || tr.UnresolvedRegrets != 1 {
+		t.Fatalf("unexpected tranche after regret: %+v", tr)
+	}
+	if len(tr.PendingRevertFamilies) != 1 || tr.PendingRevertFamilies[0] != "victim_a" {
+		t.Fatalf("expected PendingRevertFamilies=[victim_a], got %v", tr.PendingRevertFamilies)
+	}
+	if !l.ResolveLatestTrancheRegrets(now) {
+		t.Fatal("expected ResolveLatestTrancheRegrets to return true")
+	}
+	if tr.UnresolvedRegrets != 0 || len(tr.PendingRevertFamilies) != 0 || tr.Status != "soaking" {
+		t.Fatalf("unexpected tranche after resolution: %+v", tr)
+	}
+	if !l.IsPinnedNeverDrop("victim_a") {
+		t.Fatal("victim_a must remain pinned to neverDrop after regret resolution")
+	}
+}

@@ -30,6 +30,8 @@ import (
 	"trimtab.io/trimtab/pkg/usage/slo"
 )
 
+const exitCodeRegret = 3
+
 var (
 	version = "v0.1.0-dev"
 	commit  = "local"
@@ -83,10 +85,17 @@ Common Flags:
   --state <path>                 Override State Ledger (.trimtab-state.json) path
   --accept-baseline-shift        Acknowledge >20% source object count drop and update baseline
   --confirm-tranche              Explicitly confirm active pending_confirmation tranche and start soak timer
+  --resolve-regret               Clear blocked_regret state after reverted rules are applied and reviewed
   --activate                     (synth only) Explicitly activate the next eligible tranche into pending_confirmation
   --preview-next                 (synth only) Preview next eligible tranche rules without mutating State Ledger tranches
   --no-state-write               Do not persist updates to the State Ledger (dry-run)
-  --now <RFC3339>                Override evaluation timestamp (for deterministic CI / demo runs)`)
+  --now <RFC3339>                Override evaluation timestamp (for deterministic CI / demo runs)
+
+Exit Codes:
+  0   Success (0 new regrets)
+  1   Operational / fetch / runtime error
+  2   Invalid CLI arguments or flags
+  3   Forward-only Regret detected (family un-dropped & pinned to neverDrop)`)
 }
 
 func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
@@ -105,6 +114,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 		stateOverride       string
 		acceptBaselineShift bool
 		confirmTranche      bool
+		resolveRegret       bool
 		activateTranche     bool
 		previewNext         bool
 		noStateWrite        bool
@@ -115,6 +125,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 	fs.StringVar(&stateOverride, "state", "", "Override State Ledger path")
 	fs.BoolVar(&acceptBaselineShift, "accept-baseline-shift", false, "Acknowledge baseline drift and update stored counts")
 	fs.BoolVar(&confirmTranche, "confirm-tranche", false, "Explicitly confirm active pending_confirmation tranche and start soak")
+	fs.BoolVar(&resolveRegret, "resolve-regret", false, "Clear blocked_regret state after collector revert and review")
 	fs.BoolVar(&noStateWrite, "no-state-write", false, "Do not persist State Ledger updates")
 	fs.StringVar(&nowStr, "now", "", "Override current UTC time (RFC3339)")
 	if synthOnly {
@@ -274,6 +285,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 		ActivateNextTranche: synthOnly && activateTranche,
 		PreviewNextTranche:  synthOnly && previewNext,
 		ConfirmTranche:      confirmTranche,
+		ResolveRegret:       resolveRegret,
 		HardFetchErrors:     hardErrors,
 	})
 	if err != nil {
@@ -319,6 +331,9 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 		if len(hardErrors) > 0 {
 			return 1
 		}
+		if len(auditReport.Regrets) > 0 {
+			return exitCodeRegret
+		}
 		return 0
 	}
 
@@ -331,6 +346,9 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 
 	if len(hardErrors) > 0 {
 		return 1
+	}
+	if len(auditReport.Regrets) > 0 {
+		return exitCodeRegret
 	}
 	return 0
 }

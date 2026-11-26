@@ -30,15 +30,23 @@
 | **Phase 2** | **P2.1d** | Lean Helm Chart (`charts/trimtab/`) & Non-Prod Quickstart | `charts/trimtab/`, `.github/workflows/`, `README.md` | `[x]` Completed |
 | **Phase 2** | **P2.2** | Critical Infrastructure & Ruler Usage Sources | `pkg/usage/ruler/`, `pkg/usage/k8sconsumers/` | `[x]` Completed |
 | **Phase 2** | **P2.3** | Observability Ecosystem Static Consumers | `pkg/usage/alertmanager/`, `pkg/usage/perses/`, `pkg/usage/slo/` | `[x]` Completed |
-| **Phase 2** | **P2.4** | Per-Team Attribution & FinOps Exporter | `pkg/attribution/`, `pkg/exporter/` | `[ ]` Next |
-| **Phase 2** | **P2.5** | GitOps PR Actuator | `pkg/actuator/`, `pkg/actuator/gitops/` | `[ ]` Planned |
-| **Phase 2** | **P2.6** | Kubernetes Operator & CRDs | `api/v1alpha1/`, `internal/controller/`, `cmd/trimtab-operator/` | `[ ]` Planned |
-| **Phase 2** | **P2.7** | Multi-Cluster & Per-Selector Drop Scoping | `pkg/scope/`, `pkg/state/`, `pkg/engine/` | `[ ]` Planned |
+| **Phase 2** | **P2.4** | Live-Scale Hardening & Incremental Query-Log Ingestion | `pkg/state/`, `pkg/usage/querylog/`, `pkg/inventory/prometheus/`, `charts/trimtab/`, `test/e2e/` | `[ ]` Next |
+| **Phase 2** | **P2.5** | GitOps PR Actuator & Operational Alerting | `pkg/actuator/`, `pkg/actuator/gitops/`, `pkg/notify/` | `[ ]` Planned |
+| **Phase 2** | **P2.6** | Query-Log Genericity & Lightweight In-Cluster K8s Discovery | `pkg/usage/querylog/`, `pkg/usage/k8sconsumers/` | `[ ]` Planned |
+| **Phase 2** | **P2.7** | Per-Team Attribution & FinOps Exporter | `pkg/attribution/`, `pkg/exporter/` | `[ ]` Planned |
+| **Phase 2** | **P2.8** | Multi-Cluster & Per-Selector Drop Scoping | `pkg/scope/`, `pkg/state/`, `pkg/engine/` | `[ ]` Planned |
+| **Phase 2** | **P2.9** | Kubernetes Operator & CRDs *(Deferred / Opt-In)* | `api/v1alpha1/`, `internal/controller/`, `cmd/trimtab-operator/` | `[ ]` Deferred |
 | **Phase 3** | **P3.1** | Shard-Safe Aggregation Synthesizer | `pkg/synthesizer/aggregate/` | `[ ]` Future |
 | **Phase 3** | **P3.2** | Direct Alloy Config Import Add-on | `pkg/discovery/alloy/` | `[ ]` Future |
-| **Phase 3** | **P3.3** | Logs Signal Engine (Loki / LogQL) | `pkg/logs/` | `[ ]` Future |
-| **Phase 3** | **P3.4** | Traces Signal Engine (Tail Sampling) | `pkg/traces/` | `[ ]` Future |
+| **Phase 3** | **P3.3** | Logs Signal Engine (Loki / LogQL) *(Parked — Metrics-First)* | `pkg/logs/` | `[ ]` Future |
+| **Phase 3** | **P3.4** | Traces Signal Engine (Tail Sampling) *(Parked — Metrics-First)* | `pkg/traces/` | `[ ]` Future |
 | **Phase 3** | **P3.5** | OpAMP Break-Glass Actuator | `pkg/actuator/opamp/` | `[ ]` Future |
+
+> **Strategic Prioritization Note (2026-11-26):** Live Kind LGTM E2E runs (`test/e2e/FINDINGS.md`) and production-readiness review drove four targeted adjustments to Phase 2–3 sequencing:
+> 1. **Scale & Incremental Ingestion First (`P2.4`):** Replace full 30-day Loki/file re-scans with persisted incremental cursors, exclude `series == 0` historical remnants from drop tranches, and live-verify `promrw` + `otel` E2E profiles before adding new features.
+> 2. **Close the Core Closed-Loop Promise Next (`P2.5`):** Ship GitOps PRs (especially `[URGENT]` Regret Revert PRs) + lightweight webhook/metric alerting ahead of Team FinOps dashboards and CRDs.
+> 3. **Broaden Query-Log & In-Cluster Genericity (`P2.6`):** Add live `prom-analytics-proxy`, Thanos/VictoriaMetrics query logs, non-Loki log stores (Elasticsearch/OpenSearch, ClickHouse/VictoriaLogs), and read-only in-cluster K8s discovery without requiring an Operator.
+> 4. **Keep Adoption Friction Low (`P2.9` & Phase 3):** Defer the full CRD Operator (`P2.9`) until users explicitly request CRD-driven workflows (the zero-CRD Helm CronJob + GitOps PRs is a major adoption advantage), and keep Phase 3 Logs/Traces (`P3.3`–`P3.4`) parked until Metrics has proven production adoption at scale.
 
 ### Dependency Graph
 
@@ -52,13 +60,15 @@ flowchart LR
     P21d["P2.1d: Lean Helm Chart\n(CronJob, zero CRDs, helm test doctor)"]
     P22["P2.2: Ruler APIs & K8s Consumers\n(KEDA, HPA, Rollouts, Flagger)"]
     P23["P2.3: Ecosystem Consumers\n(Alertmanager, Perses, Sloth/Pyrra)"]
-    P24["P2.4: Team Attribution & Budgets\n(OpenCost-style /metrics)"]
-    P25["P2.5: GitOps PR Actuator\n(GitHub / GitLab / Regret PRs)"]
-    P26["P2.6: K8s Operator & CRDs\n(trimtab.io/v1alpha1)"]
-    P27["P2.7: Multi-Cluster Scoping\n(Per-selector drops)"]
+    P24["P2.4: Live-Scale & Incremental Cursors\n(Query-log cursors, 0-series fix, Multi-E2E)"]
+    P25["P2.5: GitOps PR Actuator & Alerting\n(GitHub / GitLab / Regret PRs / pkg/notify)"]
+    P26["P2.6: Query-Log Genericity & In-Cluster K8s\n(Proxy API, ES/OS/CH/VL, Read-only K8s API)"]
+    P27["P2.7: Team Attribution & Budgets\n(OpenCost-style /metrics)"]
+    P28["P2.8: Multi-Cluster Scoping\n(Per-selector drops)"]
+    P29["P2.9: K8s Operator & CRDs [Deferred]\n(trimtab.io/v1alpha1)"]
     P31["P3.1: Shard-Safe Aggregation\n(pkg/synthesizer/aggregate)"]
     P32["P3.2: Direct Alloy Import\n(pkg/discovery/alloy)"]
-    P33["P3.3–P3.5: Logs, Traces & OpAMP\n(Multi-signal expansion)"]
+    P33["P3.3–P3.5: Logs, Traces & OpAMP [Parked]\n(Multi-signal expansion)"]
 
     P1 --> P21
     P21 --> P21a
@@ -66,22 +76,23 @@ flowchart LR
     P21b --> P21c
     P21c --> P21d
     P21c --> P22
-    P21d --> P24
-    P21d --> P26
     P22 --> P23
-    P22 --> P24
-    P21b --> P25
-    P23 --> P25
+    P21d --> P24
+    P23 --> P24
+    P24 --> P25
     P24 --> P26
-    P25 --> P26
-    P22 --> P26
-    P21 --> P27
+    P25 --> P27
     P26 --> P27
-    P27 --> P31
+    P21 --> P28
+    P25 --> P28
+    P26 --> P28
+    P27 --> P29
+    P28 --> P29
+    P28 --> P31
     P21 --> P32
     P32 --> P31
-    P21c --> P33
-    P26 --> P33
+    P24 --> P33
+    P28 --> P33
 ```
 
 ---
@@ -92,17 +103,17 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 | Invariant | Cross-Phase Guardrail |
 | :--- | :--- |
-| **#1 Mandatory Query Log & Cold-Start** | P2.1b replaces span-only coverage with a trailing-window per-day `CoveredDates` map (`[now - minObservationWindow, now]`) and honors ledger `LastQueriedAt` + `LastBucketQueriedAt` so usage evidence survives log rotation; P2.2/P2.3 static scanners NEVER authorize drops without runtime query logs covering `>= minObservationWindow`. |
-| **#2 Query Log Origin Classification** | Recording rules returned by Mimir/Thanos Ruler APIs (P2.2) feed ONLY `ResolveRecordingRuleDAG`, never live sinks. |
-| **#3 Tranched Rollout + Sanity Ceiling** | P2.1 obeys `ActiveDrops`; P2.1b makes `trimtab analyze` observation-only (never activates tranches), requires explicit `trimtab synth --activate`, and adds `pending_confirmation -> soaking` confirmation from current active series (`--confirm-tranche` + optional `soakStartMode: "immediate"`); P2.5 opens one PR per active tranche; P2.6 respects `soakWindow` and `approvedTranche`. |
-| **#4 Baseline Drift Circuit Breaker** | P2.1b upgrades static baselines (`Dashboards`, `GrafanaAlerts`, `PromRules`, etc.) to High-Water Marks (`max(prev, curr)`, lowered only on `--accept-baseline-shift`) and evaluates query-log volume via daily entry rate with `queryLogBaselineDriftThresholdPercent` (default `50%`); P2.1c ensures `401`/`403` and missing `*Env`/`*File` secrets fail closed; P2.2/P2.3 extend `state.BaselineCounts` and `engine.SourceCounts`. |
-| **#5 Observation Window != Head Block** | P2.6 stores `StateLedger` persistently in ConfigMap/PVC so Pod restarts do not reset `first_seen_at`. |
-| **#6 Default `neverDrop` & Wildcards** | P2.1b evaluates query-log wildcard detection per individual regex query expression (never unioning all queries by caller IP/Grafana); P2.1c auto-excludes `User-Agent: trimtab/` self-queries as `excluded-explorer`; wildcard detection & `excludeSources` apply uniformly to Perses (P2.3) and K8s consumers (P2.2). |
-| **#7 Family Grouping & Capabilities** | `promrw` (P2.1) sets `CanDropHistogramBucketsOnly: true` via shared relabel helper; P2.7 refuses scoped OTel drops without `scopeAttributeMap`. |
+| **#1 Mandatory Query Log & Cold-Start** | P2.1b replaces span-only coverage with a trailing-window per-day `CoveredDates` map (`[now - minObservationWindow, now]`) and honors ledger `LastQueriedAt` + `LastBucketQueriedAt` so usage evidence survives log rotation; P2.2/P2.3/P2.6 static scanners (including read-only in-cluster K8s discovery) NEVER authorize drops without runtime query logs covering `>= minObservationWindow`; P2.4 incremental query-log cursors (`last_scanned_at` with safety overlap) preserve full `CoveredDates` and `LastQueriedAt` accuracy while P2.6 query-log adapters share the same mandatory gating. |
+| **#2 Query Log Origin Classification** | Recording rules returned by Mimir/Thanos Ruler APIs (P2.2) feed ONLY `ResolveRecordingRuleDAG`, never live sinks; P2.6 Thanos/VictoriaMetrics/proxy/non-Loki query-log parsers classify `rule-eval` vs `api-user` vs `excluded-explorer` uniformly. |
+| **#3 Tranched Rollout + Sanity Ceiling** | P2.1 obeys `ActiveDrops`; P2.1b makes `trimtab analyze` observation-only (never activates tranches), requires explicit `trimtab synth --activate`, and adds `pending_confirmation -> soaking` confirmation from current active series (`--confirm-tranche` + optional `soakStartMode: "immediate"`); P2.4 excludes `series == 0` historical remnants from consuming drop-tranche slots; P2.5 opens one PR per active tranche; P2.9 (if built) respects `soakWindow` and `approvedTranche`. |
+| **#4 Baseline Drift Circuit Breaker** | P2.1b upgrades static baselines (`Dashboards`, `GrafanaAlerts`, `PromRules`, etc.) to High-Water Marks (`max(prev, curr)`, lowered only on `--accept-baseline-shift`) and evaluates query-log volume via daily entry rate with `queryLogBaselineDriftThresholdPercent` (default `50%`); P2.1c ensures `401`/`403` and missing `*Env`/`*File` secrets fail closed; P2.2/P2.3/P2.6 extend `state.BaselineCounts` and `engine.SourceCounts`. |
+| **#5 Observation Window != Head Block** | P2.4 keeps persistent `LastScannedAt` cursors alongside `first_seen_at` in the PVC-backed `StateLedger`; P2.9 (if built) stores `StateLedger` persistently in ConfigMap/PVC so Pod restarts do not reset `first_seen_at`. |
+| **#6 Default `neverDrop` & Wildcards** | P2.1b evaluates query-log wildcard detection per individual regex query expression (never unioning all queries by caller IP/Grafana); P2.1c auto-excludes `User-Agent: trimtab/` self-queries as `excluded-explorer`; wildcard detection & `excludeSources` apply uniformly to Perses (P2.3), K8s consumers (P2.2/P2.6), and all P2.6 query-log adapters. |
+| **#7 Family Grouping & Capabilities** | `promrw` (P2.1) sets `CanDropHistogramBucketsOnly: true` via shared relabel helper; P2.8 refuses scoped OTel drops without `scopeAttributeMap`. |
 | **#8 Full Label-Usage & Dead-Chain DAG** | P2.1b fixes PromQL scalar binary comparisons (`LHS.Type() == ValueTypeVector && RHS.Type() == ValueTypeVector`) so `sum by (job) (rate(x[5m]) > 0)` retains label precision; Alertmanager `group_by`/matchers/templates (P2.3) protect labels via `LabelUsage`; P2.5 dead-rule cleanup PRs use `yaml.Node` AST editing. |
-| **#9 `DROP_DIMENSION` Advisory-Only (until P3.1)** | P2.4/P2.7 keep `DROP_DIMENSION` read-only; P3.1 introduces shard-safe aggregation only when collector shard identity is verified. |
-| **#10 Forward-Only Regret Detection** | P2.1b keeps regret checks running during observation-only `analyze` against already-active drops without activating new tranches; P2.1c streaming query-log deduplication preserves `HitCount` and `LatestTS` for regret detection; P2.5 opens `[URGENT]` Regret Revert PRs immediately; P2.6 surfaces active regrets + `breakGlassUntil`. |
-| **#11 Don't Over-Abstract Metrics** | `pkg/httpclient` (P2.1c), `pkg/actuator` (P2.5), and `pkg/state` remain signal-agnostic; `pkg/metrics`, `pkg/attribution`, `pkg/scope`, `pkg/logs` (P3.3), and `pkg/traces` (P3.4) stay idiomatic per signal. |
+| **#9 `DROP_DIMENSION` Advisory-Only (until P3.1)** | P2.7/P2.8 keep `DROP_DIMENSION` read-only; P3.1 introduces shard-safe aggregation only when collector shard identity is verified. |
+| **#10 Forward-Only Regret Detection** | P2.1b keeps regret checks running during observation-only `analyze` against already-active drops without activating new tranches; P2.1c streaming query-log deduplication preserves `HitCount` and `LatestTS` for regret detection; P2.4 incremental cursors maintain an overlap window so boundary queries never miss Regret; P2.5 opens `[URGENT]` Regret Revert PRs and dispatches webhook alerts immediately; P2.9 (if built) surfaces active regrets + `breakGlassUntil`. |
+| **#11 Don't Over-Abstract Metrics** | `pkg/httpclient` (P2.1c), `pkg/actuator` (P2.5), `pkg/notify` (P2.5), and `pkg/state` remain signal-agnostic; `pkg/metrics`, `pkg/attribution` (P2.7), `pkg/scope` (P2.8), `pkg/logs` (P3.3), and `pkg/traces` (P3.4) stay idiomatic per signal. |
 
 ---
 
@@ -304,7 +315,92 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 ---
 
-### P2.4 — Per-Team Attribution & "OpenCost for Telemetry" FinOps Exporter *(Next Build Target)*
+### P2.4 — Live-Scale Hardening & Incremental Query-Log Ingestion *(Next Build Target)*
+
+- **Goal:** Make Trimtab genuinely viable on high-QPS, high-cardinality production clusters (100k–5M+ series, millions of daily query-log lines) and close operational rough edges uncovered in live Kind E2E testing (`test/e2e/FINDINGS.md`).
+- **Scope & Packages:**
+  1. **Incremental Query-Log Cursors (`pkg/state/ledger.go`, `pkg/usage/querylog/`):**
+     - Persist per-source high-water scan cursors (`LastScannedAt`, source fingerprint / LogQL query hash) in `.trimtab-state.json`.
+     - On subsequent runs, query only `[last_scanned_at - overlap, now]` (default overlap e.g. `15m`, configurable) instead of re-scanning the full `30d` window from Loki or rotated JSONL files every 6h CronJob execution.
+     - Rely on persisted `SeenFamilies[].LastQueriedAt` / `LastBucketQueriedAt` and `QueryLogCoverage.CoveredDates` for trailing-window memory; automatically reset the cursor when the source query/selector changes, and expose `--full-rescan` as a CLI escape hatch.
+  2. **Zero-Series Remnant Filtering & Live-Scale Inventory (`pkg/inventory/prometheus/`, `pkg/engine/`):**
+     - Exclude `series == 0` historical remnants (returned by `/api/v1/label/__name__/values?start=...&end=...` when absent from current TSDB / `count by (__name__)` counts, E2E `F7.5`) from entering active drop tranches; surface them separately as stale/inactive so they never consume tranche slots or skew confirmation checks.
+     - Add configurable concurrency/batching/rate-limiting for batched `count by (__name__)`, `/api/v1/labels`, and `without`-collapse queries at 5k+ family / 1M+ series scale.
+  3. **Helm / Kubernetes Day-2 Ergonomics (`charts/trimtab/`):**
+     - Address `WaitForFirstConsumer` PVC stalls on `helm upgrade --install --wait` (E2E `F6`) via chart documentation and optional lightweight bootstrap/init guidance.
+     - Document the clean one-shot Job workflow (`kubectl create job --from=cronjob/...`) for running `trimtab synth --activate`, `--confirm-tranche`, and `--resolve-regret` against the CronJob's `ReadWriteOnce` State Ledger PVC.
+  4. **Multi-Target Live E2E Matrix (`test/e2e/`):**
+     - Keep Kind LGTM (Mimir + Loki + Grafana + Alloy) as the primary live verification gate, and add lightweight live E2E profiles for **standalone Prometheus + `promrw`** and **OpenTelemetry Collector (`filter/trimtab`)** so all 3 synthesizers are verified against real collectors.
+- **Verification & Exit Criteria:**
+  - Incremental cursor tests: cold scan -> delta scan -> overlap deduplication -> regret detection across cursor boundary -> source query change resets cursor -> `--full-rescan` bypasses cursor.
+  - Engine test confirming `series == 0` historical metrics never consume active drop tranches.
+  - Synthetic scale benchmark (5k families / 100k unique query-log entries) verifying bounded memory and runtime.
+  - Multi-target E2E profiles green across Alloy, OTel Collector, and Prometheus `remote_write`.
+
+---
+
+### P2.5 — GitOps PR Actuator & Operational Alerting
+
+- **Goal:** Automate safe, auditable GitOps pull/merge requests for tranched drops, dead recording-rule cleanup, and urgent Regret Reverts, plus lightweight operational notifications so CronJob operators do not have to babysit `kubectl logs` or exit code `3` (`DESIGN §2, §3.10, §5`).
+- **Packages & Key Types:**
+  - `pkg/actuator/actuator.go`: signal-agnostic interface (`DESIGN §5`):
+    ```go
+    type ActuationRequest struct {
+        Report          *metrics.AuditReport
+        Artifact        *synthesizer.GeneratedArtifact
+        RuleEdits       []RuleDeletion
+        StateFileUpdate []byte
+    }
+    type ActuationResult struct {
+        Mode       string
+        PRURL      string
+        PRNumber   int
+        Branch     string
+        ActionType string // "drop_tranche", "regret_revert", "dead_rule_cleanup", "noop"
+    }
+    type Actuator interface {
+        Name() string
+        Actuate(ctx context.Context, req ActuationRequest) (*ActuationResult, error)
+    }
+    ```
+  - `pkg/actuator/gitops/`:
+    - `GitProvider` interface (`EnsureBranch`, `GetFile`, `UpsertFiles`, `OpenOrUpdatePR`) with three implementations:
+      1. `github` (GitHub REST API v3; token via env var e.g. `GITHUB_TOKEN`, never stored in plaintext config).
+      2. `gitlab` (GitLab REST API v4; token via env var e.g. `GITLAB_TOKEN`).
+      3. `local` / `dryrun` (writes unified diffs & PR markdown preview to disk/stdout for offline testing & CI).
+    - **Workflow 1 — Regret Revert PR (Highest Priority):** When `len(Report.Regrets) > 0`, immediately opens/updates `trimtab/regret-revert-<name>` titled `[URGENT][Trimtab] Revert drop for <families> (regret detected)`, committing the re-synthesized artifact (regretted metrics removed) + updated state ledger (or `neverDrop` override), with the exact triggering `api-user` query, timestamp, and hit count in the PR body.
+    - **Workflow 2 — Tranched Drop PR:** When `!Report.Safety.ReportOnly && !Report.Safety.Blocked` and `Artifact.DroppedFamilies > 0`, opens/updates `trimtab/tranche-<N>-<name>` writing `Artifact.Content` to the target git path and setting PR body from `report.Render(rep, report.FormatMarkdown)`. Refuses to open drop PRs in Report-Only or Blocked states. Integrates cleanly with `P2.1b`'s `pending_confirmation -> soaking` confirmation lifecycle so the soak timer starts only once the merged PR takes effect in the metrics store.
+    - **Workflow 3 — Dead Recording-Rule Cleanup PR (Opt-in):** When `actuator.cleanupDeadRules: true`, parses target rule YAML files into `gopkg.in/yaml.v3` `yaml.Node` trees and removes only exact `(group, ruleName)` nodes identified in `Report.DeadRecordingRules`, preserving surrounding comments, anchors, and formatting, and highlighting any `HasOrVectorZero` rules in the PR description.
+  - **Lightweight Operational Alerting (`pkg/notify/`):**
+    - Optional read-only outbound webhook notifier (Slack-compatible and generic JSON payload, webhook URL via `*Env`/`*File` through `pkg/httpclient`) firing on actionable lifecycle events (`RegretDetected`, `BaselineDriftBlocked` / `HardFetchError`, `TrancheReady`, `TrancheConfirmedSoaking`).
+    - Optional Pushgateway / Prometheus textfile operational status metrics (`trimtab_regret_events_total`, `trimtab_safety_gate_blocked`, `trimtab_query_log_coverage_days`, `trimtab_active_tranche`) for CronJob deployments without a long-running server.
+- **CLI Additions (`cmd/trimtab/main.go`):**
+  - `trimtab actuate --config trimtab.yaml [--dry-run]`: runs `Analyze` + `Synthesize` + `Actuator.Actuate` + optional `pkg/notify` dispatch.
+- **Verification & Exit Criteria:**
+  - `httptest.NewServer` mock tests for GitHub, GitLab, and webhook notifier payloads (idempotent branch/commit/PR update, auth headers, secret redaction, non-2xx error handling).
+  - YAML `yaml.Node` comment-preserving deletion tests (single rule deleted from multi-rule group without mangling sibling rules/comments; empty group safely handled).
+  - Regret Revert PR integration test verifying `[URGENT]` PR + webhook alert fire even if tranche rollout is blocked.
+
+---
+
+### P2.6 — Query-Log Genericity & Lightweight In-Cluster K8s Discovery
+
+- **Goal:** Eliminate Trimtab's #1 adoption bottleneck (Loki-only live query logs) and enable live Kubernetes static-consumer discovery inside the lean zero-CRD Helm CronJob without requiring a full CRD Operator.
+- **Scope & Packages:**
+  1. **Pluggable Runtime Query-Log Backends (`pkg/usage/querylog/`):**
+     - Define a clean query-log `Source` interface sharing `P2.4` incremental cursors, streaming deduplication, `api-user` / `rule-eval` / `excluded-explorer` classification, and `trimtab/` self-query exclusion.
+     - **Live `prom-analytics-proxy` HTTP API source** (alongside existing file export) via `pkg/httpclient`.
+     - **Thanos Querier & VictoriaMetrics query-log parsers** supporting their native JSON/logfmt query-log formats across both local files and log-store backends.
+     - **Non-Loki Log Store Adapters** via `pkg/httpclient`: **Elasticsearch / OpenSearch** (`_search` with PIT/`search_after` pagination) and **ClickHouse / VictoriaLogs** (or configurable HTTP JSON/NDJSON query-log endpoint).
+  2. **Lightweight Read-Only In-Cluster K8s Discovery (`pkg/usage/k8sconsumers/`):**
+     - Implement an optional `inCluster: true` `ManifestSource` using lean stdlib HTTP/REST calls against the Kubernetes API (`ServiceAccount` token + in-cluster CA, minimal read-only RBAC in `charts/trimtab/`, zero CRDs) to discover live `PrometheusRule`, KEDA `ScaledObject`/`ScaledJob`, Argo Rollouts `AnalysisTemplate`/`ClusterAnalysisTemplate`, Flagger `MetricTemplate`/`Canary`, `prometheus-adapter` ConfigMaps, and Sloth/Pyrra CRs directly without mounting Git repositories into the CronJob.
+- **Verification & Exit Criteria:**
+  - `httptest.NewServer` tests for `prom-analytics-proxy` API, Thanos/VictoriaMetrics log fixtures, and Elasticsearch/OpenSearch + ClickHouse/VictoriaLogs pagination, incremental cursors, and secret redaction.
+  - Fake Kubernetes API `httptest` tests for `inCluster` `ManifestSource` across namespaced and cluster-scoped resources, plus Safety Matrix verification that live K8s discovery still never authorizes drops without runtime query logs (Invariant #1).
+
+---
+
+### P2.7 — Per-Team Attribution & "OpenCost for Telemetry" FinOps Exporter
 
 - **Goal:** Answer *"which team owns these active/droppable series and how much do they cost?"*, evaluate per-team budgets, and expose OpenCost-compatible Prometheus metrics (`DESIGN §2, §8`).
 - **Packages & Key Types:**
@@ -338,49 +434,27 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 ---
 
-### P2.5 — GitOps PR Actuator
+### P2.8 — Multi-Cluster & Per-Selector Drop Scoping
 
-- **Goal:** Automate safe, auditable GitOps pull/merge requests for tranched drops, dead recording-rule cleanup, and urgent Regret Reverts (`DESIGN §2, §3.10, §5`).
+- **Goal:** Allow Trimtab to drop a metric only in specific clusters/environments (e.g., drop `debug_cache_hits_total` in `cluster="staging"` while keeping it in `cluster="prod"`) without breaking single-tenant safety guarantees. *(Note: prior to `P2.8`, `inventory.selector` scopes inventory discovery only while synthesized drop rules remain global per `__name__`.)*
 - **Packages & Key Types:**
-  - `pkg/actuator/actuator.go`: signal-agnostic interface (`DESIGN §5`):
-    ```go
-    type ActuationRequest struct {
-        Report          *metrics.AuditReport
-        Artifact        *synthesizer.GeneratedArtifact
-        RuleEdits       []RuleDeletion
-        StateFileUpdate []byte
-    }
-    type ActuationResult struct {
-        Mode       string
-        PRURL      string
-        PRNumber   int
-        Branch     string
-        ActionType string // "drop_tranche", "regret_revert", "dead_rule_cleanup", "noop"
-    }
-    type Actuator interface {
-        Name() string
-        Actuate(ctx context.Context, req ActuationRequest) (*ActuationResult, error)
-    }
-    ```
-  - `pkg/actuator/gitops/`:
-    - `GitProvider` interface (`EnsureBranch`, `GetFile`, `UpsertFiles`, `OpenOrUpdatePR`) with three implementations:
-      1. `github` (GitHub REST API v3; token via env var e.g. `GITHUB_TOKEN`, never stored in plaintext config).
-      2. `gitlab` (GitLab REST API v4; token via env var e.g. `GITLAB_TOKEN`).
-      3. `local` / `dryrun` (writes unified diffs & PR markdown preview to disk/stdout for offline testing & CI).
-    - **Workflow 1 — Regret Revert PR (Highest Priority):** When `len(Report.Regrets) > 0`, immediately opens/updates `trimtab/regret-revert-<name>` titled `[URGENT][Trimtab] Revert drop for <families> (regret detected)`, committing the re-synthesized artifact (regretted metrics removed) + updated state ledger (or `neverDrop` override), with the exact triggering `api-user` query, timestamp, and hit count in the PR body.
-    - **Workflow 2 — Tranched Drop PR:** When `!Report.Safety.ReportOnly && !Report.Safety.Blocked` and `Artifact.DroppedFamilies > 0`, opens/updates `trimtab/tranche-<N>-<name>` writing `Artifact.Content` to the target git path and setting PR body from `report.Render(rep, report.FormatMarkdown)`. Refuses to open drop PRs in Report-Only or Blocked states. Integrates cleanly with `P2.1b`'s `pending_confirmation -> soaking` confirmation lifecycle so the soak timer starts only once the merged PR takes effect in the metrics store.
-    - **Workflow 3 — Dead Recording-Rule Cleanup PR (Opt-in):** When `actuator.cleanupDeadRules: true`, parses target rule YAML files into `gopkg.in/yaml.v3` `yaml.Node` trees and removes only exact `(group, ruleName)` nodes identified in `Report.DeadRecordingRules`, preserving surrounding comments, anchors, and formatting, and highlighting any `HasOrVectorZero` rules in the PR description.
-- **CLI Additions (`cmd/trimtab/main.go`):**
-  - `trimtab actuate --config trimtab.yaml [--dry-run]`: runs `Analyze` + `Synthesize` + `Actuator.Actuate`.
+  - `pkg/scope/`:
+    - `ScopeKey` (canonical sorted `label=value` tuple, e.g., `cluster=staging,env=dev`, or `""` for global scope).
+    - `ExtractQueryScopes(expr parser.Expr, scopeLabels []string)`: walks PromQL `VectorSelector` matchers (`=`, `!=`, `=~`, `!~`) for configured `policy.scopeLabels`.
+    - **Global Query Safety Invariant (Hard Requirement):** If a live query, dashboard, alert, or K8s consumer omits a matcher on a `scopeLabel` (an **unscoped query**), or uses a regex matcher that cannot be bounded, it MUST protect the metric family across **ALL scopes** (never drop in any scope on an unverified unscoped query).
+  - `pkg/state/ledger.go`: bump `CurrentSchemaVersion = 2` with automatic, lossless migration from v1 (`SeenFamilies` / `ActiveDrops` migrate under global scope `""` on `state.Load`).
+  - `pkg/engine/`: scope-aware `UsageIndex` + per-(family, scope) tranche planning and regret detection. If an unscoped `api-user` query hits a metric dropped in *any* scope, Regret fires and restores all dropped scopes for that family.
+  - `pkg/synthesizer/` (`alloy`, `promrw`, `otel`):
+    - **Alloy & Prometheus `remote_write`:** Emit multi-label relabel rules when drops are scoped, e.g. `source_labels = ["__name__", "cluster"]`, `separator = ";"`, `regex = "(metric_a|metric_b);staging"`, `action = "drop"`.
+    - **OTel Collector:** Emit scoped OTTL predicates (`'name == "metric_a" and resource.attributes["k8s.cluster.name"] == "staging"'`) **ONLY** when an explicit `synthesizer.otel.scopeAttributeMap` (`cluster -> resource.attributes["..."]` or `attributes["..."]`) is configured; otherwise refuse scoped OTel drop with a capability advisory warning (preserving Invariant #7's zero-guessing rule).
 - **Verification & Exit Criteria:**
-  - `httptest.NewServer` mock tests for GitHub and GitLab providers (idempotent branch/commit/PR update, auth headers, non-2xx error handling).
-  - YAML `yaml.Node` comment-preserving deletion tests (single rule deleted from multi-rule group without mangling sibling rules/comments; empty group safely handled).
-  - Regret Revert PR integration test verifying `[URGENT]` PR fires even if tranche rollout is blocked.
+  - Safety Matrix tests for: (1) scoped query protects only `prod` and allows dropping `staging`, (2) unscoped query protects BOTH `prod` and `staging`, (3) regex matcher `{cluster=~"prod-.*"}` protects matching scopes conservatively, (4) v1 -> v2 ledger migration preserves `first_seen_at`, `active_drops`, and `pinned_never_drop`, (5) real Prometheus `relabel.ProcessBuilder` test confirming `source_labels: [__name__, cluster]` drops `metric_a` in `staging` while keeping `metric_a` in `prod`.
 
 ---
 
-### P2.6 — Kubernetes Operator & CRDs
+### P2.9 — Kubernetes Operator & CRDs *(Deferred / Opt-In — Build on User Demand)*
 
+- **Rationale for Deferral:** The lean zero-CRD Helm `CronJob` (`P2.1d`) paired with the GitOps PR Actuator (`P2.5`) and optional read-only in-cluster K8s discovery (`P2.6`) covers most Kubernetes platform teams with minimal RBAC and operational friction. Defer building and maintaining a CRD Operator until users explicitly request CRD-driven in-cluster reconciliation and `breakGlassUntil` CR workflows.
 - **Goal:** Provide Kubernetes-native lifecycle management, scheduled audits, persistent in-cluster ledger storage, `TelemetryBudget` status enforcement, and emergency `breakGlassUntil` overrides (`DESIGN §8`).
 - **Packages & Layout:**
   - `api/v1alpha1/`: `groupversion_info.go` (`trimtab.io/v1alpha1`) and CRD Go types:
@@ -399,27 +473,11 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
 
 ---
 
-### P2.7 — Multi-Cluster & Per-Selector Drop Scoping
-
-- **Goal:** Allow Trimtab to drop a metric only in specific clusters/environments (e.g., drop `debug_cache_hits_total` in `cluster="staging"` while keeping it in `cluster="prod"`) without breaking single-tenant safety guarantees.
-- **Packages & Key Types:**
-  - `pkg/scope/`:
-    - `ScopeKey` (canonical sorted `label=value` tuple, e.g., `cluster=staging,env=dev`, or `""` for global scope).
-    - `ExtractQueryScopes(expr parser.Expr, scopeLabels []string)`: walks PromQL `VectorSelector` matchers (`=`, `!=`, `=~`, `!~`) for configured `policy.scopeLabels`.
-    - **Global Query Safety Invariant (Hard Requirement):** If a live query, dashboard, alert, or K8s consumer omits a matcher on a `scopeLabel` (an **unscoped query**), or uses a regex matcher that cannot be bounded, it MUST protect the metric family across **ALL scopes** (never drop in any scope on an unverified unscoped query).
-  - `pkg/state/ledger.go`: bump `CurrentSchemaVersion = 2` with automatic, lossless migration from v1 (`SeenFamilies` / `ActiveDrops` migrate under global scope `""` on `state.Load`).
-  - `pkg/engine/`: scope-aware `UsageIndex` + per-(family, scope) tranche planning and regret detection. If an unscoped `api-user` query hits a metric dropped in *any* scope, Regret fires and restores all dropped scopes for that family.
-  - `pkg/synthesizer/` (`alloy`, `promrw`, `otel`):
-    - **Alloy & Prometheus `remote_write`:** Emit multi-label relabel rules when drops are scoped, e.g. `source_labels = ["__name__", "cluster"]`, `separator = ";"`, `regex = "(metric_a|metric_b);staging"`, `action = "drop"`.
-    - **OTel Collector:** Emit scoped OTTL predicates (`'name == "metric_a" and resource.attributes["k8s.cluster.name"] == "staging"'`) **ONLY** when an explicit `synthesizer.otel.scopeAttributeMap` (`cluster -> resource.attributes["..."]` or `attributes["..."]`) is configured; otherwise refuse scoped OTel drop with a capability advisory warning (preserving Invariant #7's zero-guessing rule).
-- **Verification & Exit Criteria:**
-  - Safety Matrix tests for: (1) scoped query protects only `prod` and allows dropping `staging`, (2) unscoped query protects BOTH `prod` and `staging`, (3) regex matcher `{cluster=~"prod-.*"}` protects matching scopes conservatively, (4) v1 -> v2 ledger migration preserves `first_seen_at`, `active_drops`, and `pinned_never_drop`, (5) real Prometheus `relabel.ProcessBuilder` test confirming `source_labels: [__name__, cluster]` drops `metric_a` in `staging` while keeping `metric_a` in `prod`.
-
----
-
 ## 6. Phase 3 — Shard-Safe Aggregation, Multi-Signal & OpAMP *(Future Roadmap)*
 
 *(Refine each sub-phase here in `docs/PLAN.md` before building; never create a separate `PHASE3_PLAN.md`.)*
+
+> **Metrics-First Scope Guardrail:** `P3.3` (Logs) and `P3.4` (Traces) remain explicitly parked until Metrics achieves proven production adoption at scale across `P2.4`–`P2.8`. Solving safe, closed-loop, vendor-neutral metrics reduction across real production estates takes priority over horizontal multi-signal expansion.
 
 ### P3.1 — Shard-Safe Aggregation Synthesizer (`pkg/synthesizer/aggregate/`)
 

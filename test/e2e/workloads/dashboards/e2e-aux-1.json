@@ -1,0 +1,25 @@
+{
+  "dashboard": {
+    "uid": "e2e-aux-1",
+    "title": "E2E Aux Requests By Route",
+    "description": "S10 Baseline Drift HWM fixture dashboard (keeps baseline_counts.dashboards = 7)",
+    "tags": ["e2e"],
+    "editable": true,
+    "schemaVersion": 39,
+    "version": 1,
+    "refresh": "30s",
+    "time": { "from": "now-30m", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Requests by Route & Status",
+        "type": "timeseries",
+        "gridPos": { "x": 0, "y": 0, "w": 24, "h": 10 },
+        "datasource": { "type": "prometheus", "uid": "mimir" },
+        "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+        "targets": [{ "refId": "A", "expr": "sum by (route, status) (rate(e2e_used_requests_total[5m]))", "legendFormat": "{{route}} {{status}}" }]
+      }
+    ]
+  },
+  "overwrite": true
+}

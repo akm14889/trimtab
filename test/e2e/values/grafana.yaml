@@ -1,0 +1,52 @@
+adminUser: admin
+
+service:
+  type: NodePort
+  port: 80
+  nodePort: 30300
+
+persistence:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+grafana.ini:
+  dataproxy:
+    send_user_header: true
+  unified_alerting:
+    enabled: true
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Mimir
+        uid: mimir
+        type: prometheus
+        access: proxy
+        url: http://mimir.monitoring.svc.cluster.local:8080/prometheus
+        isDefault: true
+        jsonData:
+          httpMethod: POST
+          timeInterval: 15s
+          httpHeaderName1: X-Scope-OrgID
+        secureJsonData:
+          httpHeaderValue1: e2e
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://loki.monitoring.svc.cluster.local:3100
+        jsonData:
+          httpHeaderName1: X-Scope-OrgID
+        secureJsonData:
+          httpHeaderValue1: e2e

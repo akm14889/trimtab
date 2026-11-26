@@ -43,11 +43,10 @@ func Render(rep *metrics.AuditReport, format Format) (string, error) {
 func renderTable(rep *metrics.AuditReport) string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "TRIMTAB AUDIT REPORT — %s (single-tenant | window: %.0fd)\n", rep.Name, rep.WindowDays)
+	fmt.Fprintf(&b, "TRIMTAB AUDIT REPORT — %s (single-tenant | window: %s)\n", rep.Name, formatWindowLabel(rep.WindowDays))
 	if rep.Safety.QueryLogConfigured {
-		fmt.Fprintf(&b, "Query Log Coverage: %.0f/%.0f days (%s api-user queries | %s rule-evals filtered",
-			rep.Safety.QueryLogCoveredDays,
-			rep.Safety.RequiredWindowDays,
+		fmt.Fprintf(&b, "Query Log Coverage: %s (%s api-user queries | %s rule-evals filtered",
+			formatCoverageRatio(rep.Safety.QueryLogCoveredDays, rep.Safety.RequiredWindowDays),
 			formatInt(rep.Safety.APIUserQueries),
 			formatInt(rep.Safety.RuleEvalQueries),
 		)
@@ -251,7 +250,13 @@ func renderTable(rep *metrics.AuditReport) string {
 		} else if rep.Summary.TotalTranches > rep.Summary.ActiveTranche {
 			nextTranche := rep.Summary.ActiveTranche + 1
 			if rep.Safety.UnresolvedRegrets > 0 {
-				fmt.Fprintf(&b, "Next tranche (%d/%d) BLOCKED until regrets are reviewed.\n", nextTranche, rep.Summary.TotalTranches)
+				if len(rep.Safety.PendingRevertFamilies) > 0 {
+					fmt.Fprintf(&b, "Next tranche (%d/%d) BLOCKED until regrets are reviewed (awaiting collector revert for %v; apply reverted rules then pass --resolve-regret).\n",
+						nextTranche, rep.Summary.TotalTranches, rep.Safety.PendingRevertFamilies)
+				} else {
+					fmt.Fprintf(&b, "Next tranche (%d/%d) BLOCKED until regrets are reviewed (revert confirmed; run 'trimtab analyze --resolve-regret' to unblock).\n",
+						nextTranche, rep.Summary.TotalTranches)
+				}
 			} else if rep.Safety.SoakBlocked {
 				fmt.Fprintf(&b, "Next tranche (%d/%d) soaking (%s remaining with 0 regrets).\n",
 					nextTranche, rep.Summary.TotalTranches, formatDurationShort(rep.Safety.SoakRemaining),
@@ -287,10 +292,10 @@ func writeDropsTable(b *strings.Builder, drops []metrics.Recommendation) {
 func renderMarkdown(rep *metrics.AuditReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Trimtab Audit Report — `%s`\n\n", rep.Name)
-	fmt.Fprintf(&b, "- **Scope:** Single-tenant, global per metric family | **Window:** `%.0fd` | **Target:** `%s`\n", rep.WindowDays, rep.Target)
+	fmt.Fprintf(&b, "- **Scope:** Single-tenant, global per metric family | **Window:** `%s` | **Target:** `%s`\n", formatWindowLabel(rep.WindowDays), rep.Target)
 	if rep.Safety.QueryLogConfigured {
-		fmt.Fprintf(&b, "- **Query Log Coverage:** `%.0f/%.0f days` (%s `api-user` queries, %s `rule-eval` filtered)\n",
-			rep.Safety.QueryLogCoveredDays, rep.Safety.RequiredWindowDays,
+		fmt.Fprintf(&b, "- **Query Log Coverage:** `%s` (%s `api-user` queries, %s `rule-eval` filtered)\n",
+			formatCoverageRatio(rep.Safety.QueryLogCoveredDays, rep.Safety.RequiredWindowDays),
 			formatInt(rep.Safety.APIUserQueries), formatInt(rep.Safety.RuleEvalQueries),
 		)
 	} else {
@@ -441,6 +446,22 @@ func formatDurationShort(d time.Duration) string {
 		return fmt.Sprintf("%.1fd", days)
 	}
 	return d.Round(time.Minute).String()
+}
+
+func formatWindowLabel(days float64) string {
+	if days > 0 && days < 1 {
+		return time.Duration(days * float64(24*time.Hour)).Round(time.Second).String()
+	}
+	return fmt.Sprintf("%.0fd", days)
+}
+
+func formatCoverageRatio(coveredDays, requiredDays float64) string {
+	if requiredDays > 0 && requiredDays < 1 {
+		covDur := time.Duration(coveredDays * float64(24*time.Hour)).Round(time.Second)
+		reqDur := time.Duration(requiredDays * float64(24*time.Hour)).Round(time.Second)
+		return fmt.Sprintf("%s/%s", covDur, reqDur)
+	}
+	return fmt.Sprintf("%.0f/%.0f days", coveredDays, requiredDays)
 }
 
 func maxInt(a, b int) int {

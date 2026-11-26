@@ -16,7 +16,7 @@ You are resuming engineering work on Trimtab (`trimtab.io`), an open-source, ven
    - docs/DESIGN.md
    - docs/BACKENDS_AND_AUTH.md
 
-2. Identify the first unchecked `[ ]` sub-phase in the Master Phase Tracker inside `docs/PLAN.md` (currently starting from P2.4–P2.7, then Phase 3).
+2. Identify the first unchecked `[ ]` sub-phase in the Master Phase Tracker inside `docs/PLAN.md` (currently starting from P2.4–P2.9, then Phase 3).
 
 3. Verify the existing green baseline before making changes:
    go test -count=1 -race ./... && make verify
@@ -43,7 +43,7 @@ You are resuming engineering work on Trimtab (`trimtab.io`), an open-source, ven
 
 ## Prompt 2 — Execute a Specific Sub-Phase (`<SUB_PHASE_ID>`)
 
-Replace `<SUB_PHASE_ID>` (for example `P2.4`, `P2.5`, `P2.6`, `P2.7`) before pasting:
+Replace `<SUB_PHASE_ID>` (for example `P2.4`, `P2.5`, `P2.6`, `P2.7`, `P2.8`) before pasting:
 
 ```text
 Read AGENT.md, docs/CHECKPOINT.md, docs/PLAN.md, docs/DESIGN.md, and docs/BACKENDS_AND_AUTH.md in parallel.
