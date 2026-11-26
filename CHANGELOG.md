@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.1-beta.4](https://github.com/akm14889/trimtab/compare/v0.0.1-beta.3...v0.0.1-beta.4) (2026-11-26)
+
+
+### Bug Fixes
+
+* **querylog,engine:** harden Mimir logfmt parsing, cold-start coverage, regret lifecycle, and query-log rate drift ([#13](https://github.com/akm14889/trimtab/issues/13)) ([2b5c952](https://github.com/akm14889/trimtab/commit/2b5c9526decca577b474366945c9fdd030278c71))
+
 ## [0.0.1-beta.3](https://github.com/akm14889/trimtab/compare/v0.0.1-beta.2...v0.0.1-beta.3) (2026-11-23)
 
 
