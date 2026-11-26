@@ -9,7 +9,7 @@
 ## Current Status
 
 - **Completed Phases:** **Phase 1 (Metrics CLI MVP + Grafana Alloy)**, **Phase 1.1 (OpenTelemetry Collector Synthesizer + Loki Query-Log Source)**, **Phase 2.1 (Prometheus `remote_write` Synthesizer)**, **Phase 2.1a (GitHub PR CI, Release Pipeline & Toolchain Hygiene)**, **Phase 2.1b (Safety-Critical Hardening)**, **Phase 2.1c (Unified Backend Auth, Live-Scale Hardening & `trimtab doctor`)**, **Phase 2.1d (Lean Helm Chart & Non-Prod Quickstart)**, **Phase 2.2 (Critical Infrastructure & Ruler Usage Sources)**, AND **Phase 2.3 (Observability Ecosystem Static Consumers)**
-- **Overall State:** Verified & Green — ready to execute **Phase 2.4 (Per-Team Attribution & OpenCost-Style FinOps Exporter)** (see [docs/PLAN.md](PLAN.md))
+- **Overall State:** Verified & Green — ready to execute **Phase 2.4 (Live-Scale Hardening & Incremental Query-Log Ingestion)** (see [docs/PLAN.md](PLAN.md))
 - **Last Updated:** 2026-11-23
 - **Go Toolchain:** `go 1.27` in `go.mod` (`module trimtab.io/trimtab`, built/verified with Go `1.27.3`)
 - **Verification Command:** `go test -race ./... && go build ./cmd/trimtab`
@@ -35,10 +35,12 @@
 - [x] **P2.1d — Lean Helm Chart (`charts/trimtab/`) & Non-Prod Quickstart:** Zero-CRD Helm chart deploying `trimtab` as a read-only `CronJob` + PVC ledger + `envFrom` Secrets + `helm test` (`trimtab doctor`), `values.schema.json`, standalone `charts/trimtab/README.md`, `examples/values-nonprod.yaml` (`1d` window / `15m` soak / `probeFirstSeen`) + `values-prod.yaml` / `values-otel.yaml` / `values-promrw.yaml`, CI `helm lint`/`helm template` + GHCR OCI chart publishing (`pkg/config/helm_chart_test.go`).
 - [x] **P2.2 — Critical Infrastructure & Ruler Usage Sources:** Mimir/Cortex (`/prometheus/config/v1/rules`) and Prometheus/Thanos (`/api/v1/rules`) HTTP Ruler scanners (`pkg/usage/ruler/`) + multi-doc YAML `ManifestSource` scanner (`pkg/usage/k8sconsumers/`) covering KEDA, `prometheus-adapter`, Argo Rollouts, and Flagger, plus unified auth/doctor checks and `BaselineCounts` HWM drift protection (`TestSafetyMatrix_P22_RulersAndK8sConsumers`).
 - [x] **P2.3 — Observability Ecosystem Static Consumers:** Alertmanager YAML/CRD/`/api/v2/status` label scanner (`pkg/usage/alertmanager/` — scoping protected routing/grouping/inhibit/template labels exclusively to alerted metrics), Perses local dir + REST API dashboard scanner (`pkg/usage/perses/` — `PrometheusTimeSeriesQuery` + variables + `dashboard_uid` wildcard exclusion), and Sloth/Pyrra/OpenSLO specification scanner (`pkg/usage/slo/`), plus `BaselineCounts` HWM drift guards (`TestSafetyMatrix_P23_AlertmanagerPersesAndSLO`).
-- [ ] **P2.4 — Per-Team Attribution & OpenCost-Style FinOps Exporter:** Team resolver chain, `TelemetryBudget` evaluation, `trimtab serve` `/metrics` exporter.
-- [ ] **P2.5 — GitOps PR Actuator:** GitHub/GitLab tranched drop PRs, YAML-AST dead-rule cleanup PRs, automated Regret Revert PRs.
-- [ ] **P2.6 — Kubernetes Operator & CRDs:** `TelemetryAuditPolicy`, `TelemetryBudget`, `TelemetryRecommendation` (with `breakGlassUntil`).
-- [ ] **P2.7 — Multi-Cluster & Per-Selector Drop Scoping:** `pkg/scope/`, Ledger v2 migration, global-query safety invariant.
+- [ ] **P2.4 — Live-Scale Hardening & Incremental Query-Log Ingestion:** Incremental query-log cursors (`LastScannedAt` + overlap), `series == 0` remnant filtering, live-scale batching, Helm PVC/Day-2 docs, multi-target E2E profiles (`promrw`, `otel`).
+- [ ] **P2.5 — GitOps PR Actuator & Operational Alerting:** GitHub/GitLab tranched drop PRs, YAML-AST dead-rule cleanup PRs, automated `[URGENT]` Regret Revert PRs, `pkg/notify` webhooks + optional status metrics.
+- [ ] **P2.6 — Query-Log Genericity & Lightweight In-Cluster K8s Discovery:** Live `prom-analytics-proxy` API, Thanos/VictoriaMetrics log formats, Elasticsearch/OpenSearch + ClickHouse/VictoriaLogs adapters, read-only `inCluster` `ManifestSource`.
+- [ ] **P2.7 — Per-Team Attribution & OpenCost-Style FinOps Exporter:** Team resolver chain, `TelemetryBudget` evaluation, `trimtab serve` `/metrics` exporter.
+- [ ] **P2.8 — Multi-Cluster & Per-Selector Drop Scoping:** `pkg/scope/`, Ledger v2 migration, global-query safety invariant.
+- [ ] **P2.9 — Kubernetes Operator & CRDs *(Deferred / Opt-In)*:** `TelemetryAuditPolicy`, `TelemetryBudget`, `TelemetryRecommendation` (with `breakGlassUntil`).
 
 ---
 
@@ -113,7 +115,9 @@ All 13 invariants live in [pkg/engine/safety_matrix_test.go](../pkg/engine/safet
    make demo && make demo-otel && make demo-promrw
    ```
 3. **Next Build Target — Phase 2.4** (full specifications for all upcoming phases live in [docs/PLAN.md](PLAN.md); refine/append there rather than creating separate phase plan files, and update this checkpoint after each item):
-   - **P2.4 — Per-Team Attribution & OpenCost-Style FinOps Exporter (`pkg/attribution/`, `pkg/exporter/`):** Deterministic resolver chain, series-weighted team apportionment, `TelemetryBudget` evaluation, `trimtab serve` `/metrics` exporter.
-   - **P2.5 — GitOps PR Actuator (`pkg/actuator/gitops/`).**
-   - **P2.6 — Kubernetes Operator & CRDs (`api/v1alpha1/`, `internal/controller/`, `cmd/trimtab-operator/`).**
-   - **P2.7 — Multi-Cluster / Per-Selector Drop Scoping (`pkg/scope/`).**
+   - **P2.4 — Live-Scale Hardening & Incremental Query-Log Ingestion (`pkg/state/`, `pkg/usage/querylog/`, `pkg/inventory/prometheus/`, `charts/trimtab/`, `test/e2e/`).**
+   - **P2.5 — GitOps PR Actuator & Operational Alerting (`pkg/actuator/gitops/`, `pkg/notify/`).**
+   - **P2.6 — Query-Log Genericity & Lightweight In-Cluster K8s Discovery (`pkg/usage/querylog/`, `pkg/usage/k8sconsumers/`).**
+   - **P2.7 — Per-Team Attribution & OpenCost-Style FinOps Exporter (`pkg/attribution/`, `pkg/exporter/`).**
+   - **P2.8 — Multi-Cluster / Per-Selector Drop Scoping (`pkg/scope/`).**
+   - **P2.9 — Kubernetes Operator & CRDs *(Deferred / Opt-In)* (`api/v1alpha1/`, `internal/controller/`, `cmd/trimtab-operator/`).**

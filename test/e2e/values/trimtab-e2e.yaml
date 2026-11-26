@@ -91,10 +91,6 @@ config:
         value: e2e-cardinality-explorer
       - type: query_caller
         value: explorer
-      - type: query_regex
-        value: '^count by \(__name__\) \(\{__name__=~"\.\+"\}\)$'
-      - type: query_regex
-        value: '^topk\(20, count by \(__name__\) \(\{__name__=~"\.\+"\}\)\)$'
 
   synthesizer:
     target: alloy

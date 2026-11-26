@@ -6,6 +6,22 @@ Ranked by severity: **anything that can cause an unsafe drop comes first**.
 
 ---
 
+## Resolution Status
+
+All findings `F1`–`F7` have been fixed and verified with unit tests (`go test -count=1 -race ./...`, `make verify`, `make lint`, `make helm-lint`) and live against the `trimtab-e2e` Kind cluster (with `query_regex` workarounds removed from [`values/trimtab-e2e.yaml`](values/trimtab-e2e.yaml)):
+
+| Finding | Summary | Fix Location(s) | Verification |
+| :--- | :--- | :--- | :--- |
+| **F1 (CRITICAL)** | Parse unquoted single-token logfmt `param_query=` / `param_match[]=` | [`pkg/usage/querylog/loki.go`](../../pkg/usage/querylog/loki.go) (`parseLogfmtFields`) | `TestMimirRealLogfmtParsingAndExclusions`; live `S2` (`e2e_autoscaler_metric` protected as `actively consumed`, PASS) |
+| **F2 (HIGH)** | Track continuous elapsed query-log span for sub-day & `1d` windows; surface cold-start `projectedDrops` | [`pkg/state/ledger.go`](../../pkg/state/ledger.go), [`pkg/engine/analyzer.go`](../../pkg/engine/analyzer.go), [`pkg/report/report.go`](../../pkg/report/report.go) | `TestSubDayAndOneDayCoverageAndRegretResolution`, `TestE2ERegressionFindings`; live cold-start probe (`reportOnly: true`, `1m31s/20m0s`, `projectedDrops: 69`, `0` drops) |
+| **F3a/b/c (HIGH)** | Fallback to `header_user_agent=`, ignore `caller=*.go:<line>`, match `query_caller` on `userAgent`, extract `header_x_dashboard_uid=` | [`pkg/usage/querylog/loki.go`](../../pkg/usage/querylog/loki.go), [`pkg/usage/querylog/reader.go`](../../pkg/usage/querylog/reader.go) | `TestMimirRealLogfmtParsingAndExclusions`; live `S4` (`0` unexcluded wildcards with `dashboard_uid` + `query_caller` only, PASS) & `S5` (`excludedQueries=711`, `0` regrets, PASS) |
+| **F4 (MEDIUM)** | Exit code `3` on `RegretEvent`; track `pending_revert_families`, auto-clear on inventory return, add `--resolve-regret` | [`cmd/trimtab/main.go`](../../cmd/trimtab/main.go), [`pkg/state/ledger.go`](../../pkg/state/ledger.go), [`pkg/engine/analyzer.go`](../../pkg/engine/analyzer.go), [`pkg/metrics/types.go`](../../pkg/metrics/types.go) | `TestCLI_DemoAnalyzeAndSynthEndToEnd`, `TestE2ERegressionFindings`; live `S8` (all state transitions + `--resolve-regret` verified; `run_trimtab_job` updated in [`lib/trimtab.sh`](lib/trimtab.sh) to forward Pod `exitCode`) |
+| **F5 (MEDIUM)** | Normalize `QueryLogDailyRate` by `RequestedWindow` and exclude self/explorer `ExcludedCount` from rate baseline | [`pkg/usage/querylog/reader.go`](../../pkg/usage/querylog/reader.go), [`pkg/usage/querylog/loki.go`](../../pkg/usage/querylog/loki.go), [`pkg/engine/analyzer.go`](../../pkg/engine/analyzer.go) | `TestE2ERegressionFindings`; live `S9` (`baselineDriftDetected: false`, PASS) & `S11` (Loki outage `-100%` drift, PASS) |
+| **F6 (MEDIUM)** | Document `WaitForFirstConsumer` PVC behavior & omitting `--wait` for CronJob chart installs | [`charts/trimtab/README.md`](../../charts/trimtab/README.md) | `make helm-lint` & live `helm upgrade --install` in `trimtab-e2e` |
+| **F7 (LOW)** | Fix `query_stats_enabled` vs `log_queries_longer_than: 0s` docs; filter `0`-series historical names from new drop tranches | [`docs/DESIGN.md`](../../docs/DESIGN.md), [`pkg/engine/analyzer.go`](../../pkg/engine/analyzer.go) | `TestE2ERegressionFindings`; live `S2` (`e2e_new_metric` protected as `0 active series in current inventory`, PASS) |
+
+---
+
 ## F1 — CRITICAL (Unsafe Drop): Unquoted Single-Token PromQL (`param_query=<metric>`) Is Silently Dropped in Mimir Logfmt Parsing
 
 - **Affected Code:** [`pkg/usage/querylog/loki.go`](../../pkg/usage/querylog/loki.go#L32-L34), `ingestMimirLogfmtLine` (lines 190–208)

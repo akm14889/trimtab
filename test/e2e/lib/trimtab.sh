@@ -329,7 +329,11 @@ EOF
       break
     fi
     if [[ -n "${failed}" && "${failed}" != "0" ]]; then
-      exit_code=1
+      exit_code="$(kubectl -n "${TRIMTAB_NAMESPACE}" get pods -l "job-name=${job_name}" \
+        -o jsonpath='{.items[0].status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || true)"
+      if [[ -z "${exit_code}" || "${exit_code}" == "0" ]]; then
+        exit_code=1
+      fi
       break
     fi
     if (( $(date +%s) - start_ts >= 300 )); then

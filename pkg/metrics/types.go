@@ -404,6 +404,7 @@ type SafetyGateStatus struct {
 	SoakBlocked              bool          `json:"soakBlocked"`
 	SoakRemaining            time.Duration `json:"soakRemaining,omitempty"`
 	UnresolvedRegrets        int           `json:"unresolvedRegrets"`
+	PendingRevertFamilies    []string      `json:"pendingRevertFamilies,omitempty"`
 	PendingConfirmation      bool          `json:"pendingConfirmation,omitempty"`
 	PendingConfirmationSince time.Time     `json:"pendingConfirmationSince,omitempty"`
 	ActiveTrancheStatus      string        `json:"activeTrancheStatus,omitempty"`

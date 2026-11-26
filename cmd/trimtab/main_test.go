@@ -238,8 +238,8 @@ func TestCLI_DemoAnalyzeAndSynthEndToEnd(t *testing.T) {
 			"--state", regretState,
 			"--now", nowFlag,
 		}, &out, &errBuf)
-		if code != 0 {
-			t.Fatalf("regret run failed: code=%d err=%s", code, errBuf.String())
+		if code != exitCodeRegret {
+			t.Fatalf("regret run expected exit code %d, got code=%d err=%s", exitCodeRegret, code, errBuf.String())
 		}
 		if !strings.Contains(out.String(), "1 REGRET(S) DETECTED") || !strings.Contains(out.String(), "http_requests_total") {
 			t.Fatalf("expected regret event for http_requests_total in report:\n%s", out.String())
@@ -253,6 +253,29 @@ func TestCLI_DemoAnalyzeAndSynthEndToEnd(t *testing.T) {
 		}
 		if len(updated.ActiveDrops) != 0 {
 			t.Fatalf("observation-only analyze after regret must not activate new drops, got %d", len(updated.ActiveDrops))
+		}
+
+		// Resolve regret once reverted rules are applied; exits 0 and clears blocked_regret while keeping pin.
+		var outRes, errRes bytes.Buffer
+		codeRes := run([]string{
+			"analyze",
+			"--config", demoCfg,
+			"--state", regretState,
+			"--resolve-regret",
+			"--now", nowFlag,
+		}, &outRes, &errRes)
+		if codeRes != 0 {
+			t.Fatalf("--resolve-regret failed: code=%d err=%s", codeRes, errRes.String())
+		}
+		resolved, err := state.Load(regretState)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.LatestTranche().Status == "blocked_regret" || resolved.LatestTranche().UnresolvedRegrets != 0 {
+			t.Fatalf("expected regret cleared, got tranche=%+v", resolved.LatestTranche())
+		}
+		if !resolved.IsPinnedNeverDrop("http_requests_total") {
+			t.Fatal("http_requests_total must stay pinned to neverDrop after resolution")
 		}
 	})
 

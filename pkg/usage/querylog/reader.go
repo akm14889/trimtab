@@ -49,6 +49,7 @@ type entryDedupKey struct {
 // Result holds all parsed and classified query-log entries plus coverage metrics.
 type Result struct {
 	Configured        bool
+	RequestedWindow   time.Duration
 	Entries           []QueryLogEntry
 	Refs              []metrics.UsageRef
 	EarliestTimestamp time.Time
@@ -95,20 +96,31 @@ func newExcludeMatcher(excludes []config.ExcludeSource) *excludeMatcher {
 	return m
 }
 
-func (m *excludeMatcher) isExcluded(caller, dashboardUID, path, query string) bool {
+var goSourceLocationRe = regexp.MustCompile(`\.go:\d+$`)
+
+func isSourceLocationCaller(s string) bool {
+	return goSourceLocationRe.MatchString(strings.TrimSpace(s))
+}
+
+func (m *excludeMatcher) isExcluded(caller, userAgent, dashboardUID, path, query string) bool {
 	if dashboardUID != "" {
 		if _, ok := m.dashboardUIDs[dashboardUID]; ok {
 			return true
 		}
 	}
-	if caller != "" {
-		lc := strings.ToLower(caller)
-		if _, ok := m.callers[lc]; ok {
-			return true
-		}
-		for c := range m.callers {
-			if strings.Contains(lc, c) {
+	if len(m.callers) > 0 {
+		for _, cand := range []string{caller, userAgent} {
+			if cand == "" {
+				continue
+			}
+			lc := strings.ToLower(cand)
+			if _, ok := m.callers[lc]; ok {
 				return true
+			}
+			for c := range m.callers {
+				if strings.Contains(lc, c) {
+					return true
+				}
 			}
 		}
 	}
@@ -279,17 +291,19 @@ type rawQueryLogLine struct {
 	TS string `json:"ts"`
 
 	// prom-analytics-proxy / Mimir JSON / generic schema:
-	Query      string         `json:"query"`
-	QueryParam string         `json:"queryParam"`
-	ParamQuery string         `json:"param_query"`
-	Timestamp  string         `json:"timestamp"`
-	Time       string         `json:"time"`
-	ClientIP   string         `json:"clientIP"`
-	Caller     string         `json:"caller"`
-	UserAgent  string         `json:"user_agent"`
-	Path       string         `json:"path"`
-	Headers    map[string]any `json:"httpHeaders"`
-	Origin     string         `json:"origin"`
+	Query              string         `json:"query"`
+	QueryParam         string         `json:"queryParam"`
+	ParamQuery         string         `json:"param_query"`
+	Timestamp          string         `json:"timestamp"`
+	Time               string         `json:"time"`
+	ClientIP           string         `json:"clientIP"`
+	Caller             string         `json:"caller"`
+	UserAgent          string         `json:"user_agent"`
+	HeaderUserAgent    string         `json:"header_user_agent"`
+	HeaderDashboardUID string         `json:"header_x_dashboard_uid"`
+	Path               string         `json:"path"`
+	Headers            map[string]any `json:"httpHeaders"`
+	Origin             string         `json:"origin"`
 }
 
 func ingestJSONLine(raw []byte, format, sourceFile string, fallbackTS time.Time, matcher *excludeMatcher, cache map[string]*promql.ExtractResult, res *Result) {
@@ -323,8 +337,14 @@ func ingestJSONLine(raw []byte, format, sourceFile string, fallbackTS time.Time,
 	}
 
 	caller := row.Caller
+	if isSourceLocationCaller(caller) {
+		caller = ""
+	}
 	dashboardUID := ""
 	userAgent := row.UserAgent
+	if userAgent == "" && row.HeaderUserAgent != "" {
+		userAgent = row.HeaderUserAgent
+	}
 	httpPath := row.Path
 	isPromAnalyticsProxy := format == "prom-analytics-proxy" || (row.Params == nil && (row.Query != "" || row.QueryParam != "" || row.ParamQuery != ""))
 
@@ -348,6 +368,9 @@ func ingestJSONLine(raw []byte, format, sourceFile string, fallbackTS time.Time,
 			caller = extractCallerFromHeaders(row.Headers, row.ClientIP)
 		}
 	}
+	if dashboardUID == "" && row.HeaderDashboardUID != "" {
+		dashboardUID = row.HeaderDashboardUID
+	}
 	if caller == "" && userAgent != "" {
 		caller = userAgent
 	}
@@ -362,7 +385,7 @@ func ingestJSONLine(raw []byte, format, sourceFile string, fallbackTS time.Time,
 		ruleFile = row.RuleGroup.File
 	} else if row.HTTPRequest == nil && !isPromAnalyticsProxy {
 		origin = metrics.OriginRuleEval
-	} else if isSelfTrimtabCaller(caller, userAgent) || matcher.isExcluded(caller, dashboardUID, httpPath, query) {
+	} else if isSelfTrimtabCaller(caller, userAgent) || matcher.isExcluded(caller, userAgent, dashboardUID, httpPath, query) {
 		origin = metrics.OriginExcludedExplorer
 	} else {
 		origin = metrics.OriginAPIUser

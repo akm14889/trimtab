@@ -44,6 +44,7 @@ type AnalyzeInput struct {
 	ActivateNextTranche bool
 	PreviewNextTranche  bool
 	ConfirmTranche      bool
+	ResolveRegret       bool
 	HardFetchErrors     []string
 }
 
@@ -142,7 +143,11 @@ func Analyze(ctx context.Context, in AnalyzeInput) (*metrics.AuditReport, error)
 			now,
 			minObsDur,
 		)
-		report.Safety.QueryLogCoveredDays = math.Round(ledger.QueryLogCoverage.CoveredDays*10) / 10
+		if minObsDur > 0 && minObsDur < 24*time.Hour {
+			report.Safety.QueryLogCoveredDays = math.Round(ledger.QueryLogCoverage.CoveredDays*10000) / 10000
+		} else {
+			report.Safety.QueryLogCoveredDays = math.Round(ledger.QueryLogCoverage.CoveredDays*10) / 10
+		}
 		report.Safety.APIUserQueries = in.QueryLog.APIUserCount
 		report.Safety.RuleEvalQueries = in.QueryLog.RuleEvalCount
 		report.Safety.ExcludedQueries = in.QueryLog.ExcludedCount
@@ -153,8 +158,33 @@ func Analyze(ctx context.Context, in AnalyzeInput) (*metrics.AuditReport, error)
 	// and pins them to ledger.PinnedNeverDrop.
 	regrets := DetectRegrets(cat, ledger, in.QueryLog, in.Config.Policy, now)
 	report.Regrets = regrets
+
+	// Track whether reverted families have reappeared in inventory, and handle explicit --resolve-regret.
 	if lastT := ledger.LatestTranche(); lastT != nil {
+		if len(lastT.PendingRevertFamilies) > 0 {
+			remaining := make([]string, 0, len(lastT.PendingRevertFamilies))
+			for _, fam := range lastT.PendingRevertFamilies {
+				if isFamilyRestoredInInventory(cat, fam) {
+					continue
+				}
+				remaining = append(remaining, fam)
+			}
+			lastT.PendingRevertFamilies = remaining
+		}
+		if in.ResolveRegret && len(regrets) == 0 {
+			if len(lastT.PendingRevertFamilies) > 0 {
+				report.Safety.Warnings = append(report.Safety.Warnings, fmt.Sprintf(
+					"regret block resolved via --resolve-regret before revert was confirmed in inventory for %v",
+					lastT.PendingRevertFamilies,
+				))
+			}
+			ledger.ResolveLatestTrancheRegrets(now)
+		}
 		report.Safety.UnresolvedRegrets = lastT.UnresolvedRegrets
+		if len(lastT.PendingRevertFamilies) > 0 {
+			report.Safety.PendingRevertFamilies = append([]string(nil), lastT.PendingRevertFamilies...)
+		}
+		report.Safety.ActiveTrancheStatus = lastT.Status
 	}
 	if len(regrets) > 0 && report.Safety.UnresolvedRegrets < len(regrets) {
 		report.Safety.UnresolvedRegrets = len(regrets)
@@ -196,10 +226,18 @@ func Analyze(ctx context.Context, in AnalyzeInput) (*metrics.AuditReport, error)
 		report.Summary.Confidence = metrics.ConfidenceMedium
 	} else if ledger.QueryLogCoverage.CoveredDays+1e-6 < requiredDays {
 		report.Safety.ReportOnly = true
-		report.Safety.BlockReasons = append(report.Safety.BlockReasons, fmt.Sprintf(
-			"query log coverage %.1f/%.0f days < minObservationWindow — staying in Report-Only mode (projected savings only)",
-			ledger.QueryLogCoverage.CoveredDays, requiredDays,
-		))
+		if minObsDur > 0 && minObsDur < 24*time.Hour {
+			coveredDur := time.Duration(ledger.QueryLogCoverage.CoveredDays * float64(24*time.Hour))
+			report.Safety.BlockReasons = append(report.Safety.BlockReasons, fmt.Sprintf(
+				"query log coverage %s/%s < minObservationWindow — staying in Report-Only mode (projected savings only)",
+				coveredDur.Round(time.Second), minObsDur,
+			))
+		} else {
+			report.Safety.BlockReasons = append(report.Safety.BlockReasons, fmt.Sprintf(
+				"query log coverage %.1f/%.0f days < minObservationWindow — staying in Report-Only mode (projected savings only)",
+				ledger.QueryLogCoverage.CoveredDays, requiredDays,
+			))
+		}
 		report.Summary.Confidence = metrics.ConfidenceMedium
 	} else {
 		report.Summary.Confidence = metrics.ConfidenceHigh
@@ -305,6 +343,7 @@ func Analyze(ctx context.Context, in AnalyzeInput) (*metrics.AuditReport, error)
 
 	var droppableCandidates []metrics.Recommendation
 	var existingActiveDrops []metrics.Recommendation
+	var coldStartProjected []metrics.Recommendation
 	protectedCount := 0
 
 	for _, famName := range cat.OrderedNames {
@@ -338,6 +377,20 @@ func Analyze(ctx context.Context, in AnalyzeInput) (*metrics.AuditReport, error)
 				if f.ObservedDuration < minObsDur {
 					protectedCount++
 					report.ProtectedReasons[famName] = fmt.Sprintf("observed %.1fd < minObservationWindow %.0fd", obsDays, requiredDays)
+					if report.Safety.ReportOnly && in.Capabilities.CanDropHistogramBucketsOnly {
+						coldStartProjected = append(coldStartProjected, metrics.Recommendation{
+							FamilyName:   famName,
+							MetricType:   f.Type,
+							Action:       metrics.ActionDropHistogramBuckets,
+							Confidence:   report.Summary.Confidence,
+							Series:       f.Stats.BucketSeries,
+							Reason:       fmt.Sprintf("projected (only _sum/_count consumed; observed %s < %s)", formatObservedWindow(f.ObservedDuration, minObsDur), formatObservedWindow(minObsDur, minObsDur)),
+							ObservedDays: obsDays,
+							Members:      []string{famName + "_bucket"},
+							NamingMode:   f.NamingMode,
+							OTLPName:     f.OTLPName,
+						})
+					}
 					continue
 				}
 				rec := metrics.Recommendation{
@@ -403,15 +456,46 @@ func Analyze(ctx context.Context, in AnalyzeInput) (*metrics.AuditReport, error)
 			continue
 		}
 
-		// Unused family: check observation window (Invariant #5)
+		// Unused family: preserve active drops even if current series is 0, ignore non-active
+		// historical 0-series names, and check observation window (Invariant #5).
+		dropRec, alreadyActive := ledger.ActiveDrops[famName]
 		obsDays := math.Round(f.ObservedDuration.Hours()/24.0*10) / 10
-		if f.ObservedDuration < minObsDur {
-			protectedCount++
-			report.ProtectedReasons[famName] = fmt.Sprintf("observed %.1fd < minObservationWindow %.0fd", obsDays, requiredDays)
-			continue
+		if !alreadyActive {
+			if f.Stats.TotalSeries <= 0 {
+				protectedCount++
+				report.ProtectedReasons[famName] = "0 active series in current inventory"
+				continue
+			}
+			if f.ObservedDuration < minObsDur {
+				protectedCount++
+				report.ProtectedReasons[famName] = fmt.Sprintf("observed %.1fd < minObservationWindow %.0fd", obsDays, requiredDays)
+				if report.Safety.ReportOnly {
+					reason := fmt.Sprintf("projected (0 live consumers; observed %s < %s)", formatObservedWindow(f.ObservedDuration, minObsDur), formatObservedWindow(minObsDur, minObsDur))
+					if deadRules := dagRes.SourceDeadChains[famName]; len(deadRules) > 0 {
+						reason = fmt.Sprintf("projected (dead recording-rule chain, %d rules; observed %s < %s)", len(deadRules), formatObservedWindow(f.ObservedDuration, minObsDur), formatObservedWindow(minObsDur, minObsDur))
+					}
+					coldStartProjected = append(coldStartProjected, metrics.Recommendation{
+						FamilyName:   famName,
+						MetricType:   f.Type,
+						Action:       metrics.ActionDropFamily,
+						Confidence:   report.Summary.Confidence,
+						Series:       f.Stats.TotalSeries,
+						Reason:       reason,
+						ObservedDays: obsDays,
+						Members:      f.Members,
+						NamingMode:   f.NamingMode,
+						OTLPName:     f.OTLPName,
+					})
+				}
+				continue
+			}
 		}
 
 		// Eligible for DROP_FAMILY!
+		series := f.Stats.TotalSeries
+		if alreadyActive && series == 0 && dropRec.SeriesAtDrop > 0 {
+			series = dropRec.SeriesAtDrop
+		}
 		reason := fmt.Sprintf("0 live consumers (observed %.0fd)", obsDays)
 		if deadRules := dagRes.SourceDeadChains[famName]; len(deadRules) > 0 {
 			reason = fmt.Sprintf("dead recording-rule chain (%d rules)", len(deadRules))
@@ -421,14 +505,14 @@ func Analyze(ctx context.Context, in AnalyzeInput) (*metrics.AuditReport, error)
 			MetricType:   f.Type,
 			Action:       metrics.ActionDropFamily,
 			Confidence:   report.Summary.Confidence,
-			Series:       f.Stats.TotalSeries,
+			Series:       series,
 			Reason:       reason,
 			ObservedDays: obsDays,
 			Members:      f.Members,
 			NamingMode:   f.NamingMode,
 			OTLPName:     f.OTLPName,
 		}
-		if _, already := ledger.ActiveDrops[famName]; already {
+		if alreadyActive {
 			rec.Synthesized = true
 			existingActiveDrops = append(existingActiveDrops, rec)
 		} else {
@@ -528,7 +612,26 @@ func Analyze(ctx context.Context, in AnalyzeInput) (*metrics.AuditReport, error)
 	canSynthesize := !report.Safety.ReportOnly && !report.Safety.Blocked
 	if !canSynthesize {
 		// Report-Only or Blocked: 0 synthesized drops; expose projected drops for visibility!
-		report.ProjectedDrops = allDroppable
+		projected := append([]metrics.Recommendation(nil), allDroppable...)
+		if report.Safety.ReportOnly && len(coldStartProjected) > 0 {
+			seenProj := make(map[string]struct{}, len(projected))
+			for _, p := range projected {
+				seenProj[p.FamilyName] = struct{}{}
+			}
+			for _, p := range coldStartProjected {
+				if _, dup := seenProj[p.FamilyName]; !dup {
+					seenProj[p.FamilyName] = struct{}{}
+					projected = append(projected, p)
+				}
+			}
+		}
+		sort.Slice(projected, func(i, j int) bool {
+			if projected[i].Series != projected[j].Series {
+				return projected[i].Series > projected[j].Series
+			}
+			return projected[i].FamilyName < projected[j].FamilyName
+		})
+		report.ProjectedDrops = projected
 		report.Summary.SynthesizedFamilies = 0
 		report.Summary.SynthesizedSeries = 0
 		report.Summary.SynthesizedPercent = 0
@@ -542,10 +645,17 @@ func Analyze(ctx context.Context, in AnalyzeInput) (*metrics.AuditReport, error)
 		if lastT := ledger.LatestTranche(); lastT != nil {
 			if lastT.UnresolvedRegrets > 0 {
 				canUnlockNext = false
-				report.Safety.Warnings = append(report.Safety.Warnings, fmt.Sprintf(
-					"tranche %d has %d unresolved regret(s); holding next tranche rollout",
-					lastT.Number, lastT.UnresolvedRegrets,
-				))
+				if len(lastT.PendingRevertFamilies) > 0 {
+					report.Safety.Warnings = append(report.Safety.Warnings, fmt.Sprintf(
+						"tranche %d has %d unresolved regret(s) awaiting collector revert for %v (apply reverted rules then run --resolve-regret); holding next tranche rollout",
+						lastT.Number, lastT.UnresolvedRegrets, lastT.PendingRevertFamilies,
+					))
+				} else {
+					report.Safety.Warnings = append(report.Safety.Warnings, fmt.Sprintf(
+						"tranche %d has %d unresolved regret(s) with revert confirmed in inventory; run --resolve-regret to unblock next tranche rollout",
+						lastT.Number, lastT.UnresolvedRegrets,
+					))
+				}
 			} else if lastT.Status == "pending_confirmation" {
 				confirmed := in.ConfirmTranche ||
 					in.Config.Policy.SoakStartMode == "immediate" ||
@@ -727,32 +837,67 @@ func collectSourceCounts(in AnalyzeInput) SourceCounts {
 	}
 	if in.QueryLog != nil && in.QueryLog.Configured {
 		sc.QueryLogEntries = state.IntPtr(in.QueryLog.TotalEntries)
+		numerator := in.QueryLog.APIUserCount + in.QueryLog.RuleEvalCount
+		if numerator == 0 && in.QueryLog.ExcludedCount == 0 {
+			numerator = in.QueryLog.TotalEntries
+		}
 		var rate float64
-		if len(in.QueryLog.ObservedDates) > 0 {
-			total := 0
-			days := 0
-			for _, cnt := range in.QueryLog.ObservedDates {
-				if cnt > 0 {
-					total += cnt
-					days++
+		if numerator > 0 {
+			winDays := in.QueryLog.RequestedWindow.Hours() / 24.0
+			if len(in.QueryLog.ObservedDates) > 0 {
+				days := 0
+				for _, cnt := range in.QueryLog.ObservedDates {
+					if cnt > 0 {
+						days++
+					}
 				}
-			}
-			if days > 0 {
-				rate = math.Round(float64(total)/float64(days)*100) / 100
-			}
-		} else if in.QueryLog.TotalEntries > 0 {
-			days := 1.0
-			if !in.QueryLog.EarliestTimestamp.IsZero() && !in.QueryLog.LatestTimestamp.IsZero() {
-				d := in.QueryLog.LatestTimestamp.Sub(in.QueryLog.EarliestTimestamp).Hours() / 24.0
-				if d > 1.0 {
-					days = d
+				if days > 0 {
+					denom := float64(days)
+					if winDays > 0 && winDays < denom {
+						denom = winDays
+					}
+					rate = math.Round(float64(numerator)/denom*100) / 100
 				}
+			} else {
+				days := 1.0
+				if winDays > 0 && winDays < days {
+					days = winDays
+				} else if !in.QueryLog.EarliestTimestamp.IsZero() && !in.QueryLog.LatestTimestamp.IsZero() {
+					d := in.QueryLog.LatestTimestamp.Sub(in.QueryLog.EarliestTimestamp).Hours() / 24.0
+					if d > 1.0 {
+						days = d
+					}
+				}
+				rate = math.Round(float64(numerator)/days*100) / 100
 			}
-			rate = math.Round(float64(in.QueryLog.TotalEntries)/days*100) / 100
 		}
 		sc.QueryLogDailyRate = state.Float64Ptr(rate)
 	}
 	return sc
+}
+
+func isFamilyRestoredInInventory(cat *FamilyCatalog, family string) bool {
+	if cat == nil {
+		return false
+	}
+	f, ok := cat.Families[family]
+	if !ok || f == nil {
+		return false
+	}
+	if f.Type == metrics.MetricTypeHistogram && !f.IsNativeHistogram {
+		return f.Stats.BucketSeries > 0
+	}
+	return f.Stats.TotalSeries > 0
+}
+
+func formatObservedWindow(d, ref time.Duration) string {
+	if ref > 0 && ref < 24*time.Hour {
+		if d < 0 {
+			d = 0
+		}
+		return d.Round(time.Second).String()
+	}
+	return fmt.Sprintf("%.0fd", math.Round(d.Hours()/24.0*10)/10)
 }
 
 func detectWildcardsAndExclusions(cat *FamilyCatalog, refs []metrics.UsageRef, policy config.PolicyConfig) ([]metrics.WildcardSource, map[string]bool) {

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -27,15 +26,6 @@ type lokiQueryRangeResp struct {
 	} `json:"data"`
 }
 
-var (
-	// Mimir query-frontend logfmt query extraction: query="..." or param_query="..."
-	logfmtQuotedQueryRe = regexp.MustCompile(`(?:^|\s)(?:param_)?query="((?:[^"\\]|\\.)*)"`)
-	// Mimir query-frontend series/label matchers: param_match[]="..." or match[]="..."
-	logfmtQuotedMatchRe = regexp.MustCompile(`(?:^|\s)(?:param_)?match\[\]="((?:[^"\\]|\\.)*)"`)
-	logfmtCallerRe      = regexp.MustCompile(`(?:^|\s)(?:caller|org_id)="?([^\s"]+)"?`)
-	logfmtUserAgentRe   = regexp.MustCompile(`(?:^|\s)user_agent="((?:[^"\\]|\\.)*)"|(?:^|\s)user_agent=([^\s"]+)`)
-)
-
 // readLokiSource implements the Loki-backed query-log source (DESIGN §3.2) with unified auth,
 // forward pagination within chunks, Mimir param_query/param_match[] parsing, and self-query exclusion.
 func readLokiSource(
@@ -56,6 +46,9 @@ func readLokiSource(
 	}
 	if window <= 0 {
 		window = 30 * 24 * time.Hour
+	}
+	if window > res.RequestedWindow {
+		res.RequestedWindow = window
 	}
 	chunk := cfg.ChunkSize.Duration()
 	if chunk <= 0 {
@@ -188,49 +181,129 @@ func ingestLokiJSONLine(raw []byte, fallbackTS time.Time, matcher *excludeMatche
 }
 
 func ingestMimirLogfmtLine(line string, ts time.Time, matcher *excludeMatcher, cache map[string]*promql.ExtractResult, res *Result) {
-	query := ""
-	if m := logfmtQuotedQueryRe.FindStringSubmatch(line); len(m) >= 2 {
-		if unq, err := strconv.Unquote(`"` + m[1] + `"`); err == nil {
-			query = unq
-		} else {
-			query = m[1]
-		}
-	} else if mm := logfmtQuotedMatchRe.FindStringSubmatch(line); len(mm) >= 2 {
-		if unq, err := strconv.Unquote(`"` + mm[1] + `"`); err == nil {
-			query = unq
-		} else {
-			query = mm[1]
-		}
-	}
-	query = strings.TrimSpace(query)
+	fields := parseLogfmtFields(line)
+	query := strings.TrimSpace(firstNonEmpty(
+		fields["param_query"],
+		fields["query"],
+		fields["param_match[]"],
+		fields["match[]"],
+	))
 	if query == "" {
 		return
 	}
 
-	caller := ""
-	if cm := logfmtCallerRe.FindStringSubmatch(line); len(cm) > 1 {
-		caller = cm[1]
+	userAgent := firstNonEmpty(
+		fields["user_agent"],
+		fields["header_user_agent"],
+		fields["http_user_agent"],
+	)
+	caller := fields["caller"]
+	if isSourceLocationCaller(caller) {
+		caller = ""
 	}
-	userAgent := ""
-	if uam := logfmtUserAgentRe.FindStringSubmatch(line); len(uam) > 1 {
-		if uam[1] != "" {
-			if unq, err := strconv.Unquote(`"` + uam[1] + `"`); err == nil {
-				userAgent = unq
-			} else {
-				userAgent = uam[1]
-			}
-		} else {
-			userAgent = uam[2]
-		}
+	if caller == "" {
+		caller = firstNonEmpty(userAgent, fields["org_id"])
 	}
-	if caller == "" && userAgent != "" {
-		caller = userAgent
-	}
+	dashboardUID := firstNonEmpty(
+		fields["header_x_dashboard_uid"],
+		fields["x_dashboard_uid"],
+		fields["dashboard_uid"],
+	)
+	httpPath := firstNonEmpty(
+		fields["path"],
+		fields["http_path"],
+	)
 
 	// Mimir query-frontend logs API user queries (Mimir Ruler bypasses query-frontend).
 	origin := metrics.OriginAPIUser
-	if isSelfTrimtabCaller(caller, userAgent) || matcher.isExcluded(caller, "", "", query) {
+	if isSelfTrimtabCaller(caller, userAgent) || matcher.isExcluded(caller, userAgent, dashboardUID, httpPath, query) {
 		origin = metrics.OriginExcludedExplorer
 	}
-	recordEntry(query, ts, origin, "", "", caller, "", "", "loki:mimir-query-frontend", cache, res)
+	recordEntry(query, ts, origin, "", "", caller, dashboardUID, httpPath, "loki:mimir-query-frontend", cache, res)
+}
+
+// parseLogfmtFields extracts key=value pairs from logfmt lines (supporting both quoted
+// strings with backslash escapes and unquoted single-token values). Preserves the first
+// non-empty value if a key repeats.
+func parseLogfmtFields(line string) map[string]string {
+	fields := make(map[string]string)
+	n := len(line)
+	i := 0
+	for i < n {
+		for i < n && (line[i] == ' ' || line[i] == '\t' || line[i] == '\r' || line[i] == '\n') {
+			i++
+		}
+		if i >= n {
+			break
+		}
+		kStart := i
+		for i < n && line[i] != '=' && line[i] != ' ' && line[i] != '\t' && line[i] != '\r' && line[i] != '\n' {
+			i++
+		}
+		if i >= n || line[i] != '=' {
+			// Bare key without '=', advance past token if needed.
+			continue
+		}
+		key := line[kStart:i]
+		i++ // skip '='
+		if i >= n || line[i] == ' ' || line[i] == '\t' || line[i] == '\r' || line[i] == '\n' {
+			continue
+		}
+		var val string
+		if line[i] == '"' {
+			qStart := i
+			i++
+			escaped := false
+			closed := false
+			for i < n {
+				c := line[i]
+				if escaped {
+					escaped = false
+					i++
+					continue
+				}
+				if c == '\\' {
+					escaped = true
+					i++
+					continue
+				}
+				if c == '"' {
+					i++
+					closed = true
+					break
+				}
+				i++
+			}
+			if closed {
+				if unq, err := strconv.Unquote(line[qStart:i]); err == nil {
+					val = unq
+				} else {
+					val = line[qStart+1 : i-1]
+				}
+			} else {
+				val = line[qStart+1:]
+			}
+		} else {
+			vStart := i
+			for i < n && line[i] != ' ' && line[i] != '\t' && line[i] != '\r' && line[i] != '\n' {
+				i++
+			}
+			val = line[vStart:i]
+		}
+		if key != "" && val != "" {
+			if _, exists := fields[key]; !exists {
+				fields[key] = val
+			}
+		}
+	}
+	return fields
+}
+
+func firstNonEmpty(candidates ...string) string {
+	for _, c := range candidates {
+		if c != "" {
+			return c
+		}
+	}
+	return ""
 }
