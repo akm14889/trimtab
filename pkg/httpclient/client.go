@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -197,6 +198,17 @@ func (c *Client) Get(ctx context.Context, endpoint string) ([]byte, error) {
 
 // GetWithStatus performs an idempotent read-only HTTP GET and returns the response body and status code.
 func (c *Client) GetWithStatus(ctx context.Context, endpoint string) ([]byte, int, error) {
+	return c.doWithRetry(ctx, http.MethodGet, endpoint, "", nil)
+}
+
+// Put performs an idempotent HTTP PUT (e.g., Prometheus Pushgateway) with unified auth,
+// TLS, secret redaction, and bounded retries on transient errors.
+func (c *Client) Put(ctx context.Context, endpoint, contentType string, payload []byte) ([]byte, error) {
+	body, _, err := c.doWithRetry(ctx, http.MethodPut, endpoint, contentType, payload)
+	return body, err
+}
+
+func (c *Client) doWithRetry(ctx context.Context, method, endpoint, contentType string, payload []byte) ([]byte, int, error) {
 	sec, err := c.currentSecrets()
 	if err != nil {
 		return nil, 0, fmt.Errorf("load backend credentials: %w", err)
@@ -210,15 +222,22 @@ func (c *Client) GetWithStatus(ctx context.Context, endpoint string) ([]byte, in
 	var lastErr error
 	var lastStatus int
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+		var bodyReader io.Reader
+		if payload != nil {
+			bodyReader = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, targetURL, bodyReader)
 		if err != nil {
-			return nil, 0, fmt.Errorf("build GET %s: %w", endpoint, err)
+			return nil, 0, fmt.Errorf("build %s %s: %w", method, endpoint, err)
 		}
 		c.applyHeaders(req, sec)
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("GET %s: %s", endpoint, c.Redact(err.Error()))
+			lastErr = fmt.Errorf("%s %s: %s", method, endpoint, c.Redact(err.Error()))
 			if attempt == c.maxRetries || ctx.Err() != nil {
 				return nil, 0, lastErr
 			}
@@ -248,7 +267,7 @@ func (c *Client) GetWithStatus(ctx context.Context, endpoint string) ([]byte, in
 
 		httpErr := &HTTPError{
 			StatusCode: resp.StatusCode,
-			Method:     http.MethodGet,
+			Method:     method,
 			Endpoint:   endpoint,
 			Body:       c.Redact(strings.TrimSpace(string(body))),
 		}

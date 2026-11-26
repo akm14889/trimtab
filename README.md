@@ -19,6 +19,24 @@ Trimtab audits real telemetry usage across **runtime query logs** (globbed Prome
 
 ---
 
+## Try It Locally
+
+Choose the fastest way to see Trimtab in action—see **[docs/LOCAL_EXPERIENCE.md](docs/LOCAL_EXPERIENCE.md)** for the full step-by-step walkthrough, UI credentials, and port-forwarding options:
+
+- **Offline HTML Report (10 seconds, Go only):**
+  ```bash
+  make demo-html && xdg-open examples/demo/out/report.html   # macOS: open examples/demo/out/report.html
+  ```
+- **Live Kind Stack + Grafana Dashboards (`docker` + `kind` + `kubectl` + `helm`):**
+  ```bash
+  make e2e-dev
+  # Open Grafana Control Plane: http://localhost:30300/d/trimtab-control-plane
+  # Open HTML Audit Report:     test/e2e/artifacts/dev/report.html
+  # Clean up when done:         make e2e-down
+  ```
+
+---
+
 ## 5-Second Offline Demo
 
 Run Trimtab against the bundled offline fixture dataset (`examples/demo/`)—no live Prometheus or Grafana required:
@@ -37,6 +55,9 @@ make demo-promrw
 
 # Render Markdown report (great for CI / PR comments)
 make demo-markdown
+
+# Generate standalone HTML report + Prometheus operational metrics
+make demo-html
 ```
 
 ---
@@ -47,9 +68,16 @@ make demo-markdown
 # Observation-only audit: check safety gates, run regret check, and print report (never activates drops)
 trimtab analyze --config trimtab.yaml
 
-# Export Markdown or JSON reports
+# Export Markdown, JSON, or standalone HTML reports
 trimtab analyze --config trimtab.yaml --format markdown
 trimtab analyze --config trimtab.yaml --format json
+trimtab analyze --config trimtab.yaml --format html --out ./report.html
+
+# Emit operational trimtab_* Prometheus metrics (textfile and/or Pushgateway)
+trimtab analyze --config trimtab.yaml \
+  --metrics-out ./trimtab.prom \
+  --pushgateway-url http://pushgateway.monitoring.svc:9091 \
+  --pushgateway-job trimtab
 
 # Preview next eligible tranche rules without mutating State Ledger tranches
 trimtab synth --config trimtab.yaml --preview-next --out -
@@ -85,6 +113,28 @@ helm test trimtab -n trimtab --logs
 ```
 
 For fast non-production cluster validation (`*/15 * * * *` schedule, `1d` observation window, `15m` soak window, `probeFirstSeen: true`), use [`charts/trimtab/examples/values-nonprod.yaml`](charts/trimtab/examples/values-nonprod.yaml). See [`charts/trimtab/README.md`](charts/trimtab/README.md) for the standalone chart guide, TLS/secret setup, collector integration snippets, and full values reference.
+
+---
+
+## Visualizing Results (HTML Report & Grafana Dashboard)
+
+1. **Standalone Single-File HTML Report (`--format html`):**
+   Zero external CDN or JavaScript dependencies—open directly in a browser or archive as a CI artifact:
+   ```bash
+   # Offline demo (outputs examples/demo/out/report.html and examples/demo/out/trimtab.prom)
+   make demo-html
+
+   # Live or custom config
+   trimtab analyze --config trimtab.yaml --format html --out ./report.html
+   ```
+2. **Operational Metrics (`trimtab_*`) & Grafana Dashboard:**
+   Import [`deploy/dashboards/trimtab-overview.json`](deploy/dashboards/trimtab-overview.json) into Grafana, or install the Helm chart (`grafanaDashboard.enabled: true` and `cronjob.metricsOut: "/var/lib/trimtab/trimtab.prom"` are enabled by default) with optional Pushgateway delivery:
+   ```bash
+   helm upgrade --install trimtab ./charts/trimtab -n trimtab \
+     -f my-values.yaml \
+     --set cronjob.pushgatewayURL=http://pushgateway.monitoring.svc:9091
+   ```
+   To spin up a full local LGTM stack + `trimtab:dev` container + Grafana dashboards in Kind (without running the 40-minute E2E test suite), run `make e2e-dev` and `make e2e-dev-reload` (see [`test/e2e/README.md`](test/e2e/README.md)).
 
 ---
 
@@ -145,6 +195,7 @@ See [examples/demo/prometheus-remote-write.yaml.example](examples/demo/prometheu
 
 ## Documentation
 
+- [docs/LOCAL_EXPERIENCE.md](docs/LOCAL_EXPERIENCE.md) — Step-by-step local try-it guide (offline HTML report & live Kind + Grafana dashboard)
 - [docs/LOCAL_DEV.md](docs/LOCAL_DEV.md) — Local development & Kind/Tilt Kubernetes setup (including NixOS prerequisites)
 - [docs/DESIGN.md](docs/DESIGN.md) — Full architecture, rationale, invariants, and phased roadmap
 - [docs/PLAN.md](docs/PLAN.md) — Living iterative implementation plan across all phases (P2.1b–P3.5)

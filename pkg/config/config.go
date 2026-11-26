@@ -109,6 +109,7 @@ func DefaultNeverDropPatterns() []string {
 		`^prometheus_.*`,
 		`^alloy_.*`,
 		`^otelcol_.*`,
+		`^trimtab_.*`,
 	}
 }
 

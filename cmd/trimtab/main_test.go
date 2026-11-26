@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -619,6 +620,94 @@ usage:
 		}
 		if !strings.Contains(outFail.String(), "[REDACTED]") || !strings.Contains(outFail.String(), "glob matched 0 files") {
 			t.Fatalf("expected redacted Perses FAIL + missing SLO glob FAIL:\n%s", outFail.String())
+		}
+	})
+
+	t.Run("analyze --format html --out --metrics-out and --pushgateway-url (including on regret)", func(t *testing.T) {
+		var pushedPath, pushedBody string
+		pushSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPut {
+				http.Error(w, "want PUT", http.StatusMethodNotAllowed)
+				return
+			}
+			pushedPath = r.URL.Path
+			b, _ := io.ReadAll(r.Body)
+			pushedBody = string(b)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer pushSrv.Close()
+
+		htmlOut := filepath.Join(tmpDir, "audit.html")
+		metricsOut := filepath.Join(tmpDir, "trimtab.prom")
+
+		// Normal run writes HTML + Prometheus textfile + pushes to Pushgateway
+		var outOK, errOK bytes.Buffer
+		code := run([]string{
+			"analyze",
+			"--config", demoCfg,
+			"--format", "html",
+			"--out", htmlOut,
+			"--metrics-out", metricsOut,
+			"--pushgateway-url", pushSrv.URL,
+			"--pushgateway-job", "trimtab-ci",
+			"--no-state-write",
+			"--state", filepath.Join(tmpDir, "missing-html.json"),
+			"--now", nowFlag,
+		}, &outOK, &errOK)
+		if code != 0 {
+			t.Fatalf("analyze html/metrics failed: code=%d stderr=%s", code, errOK.String())
+		}
+		if !strings.Contains(outOK.String(), "Wrote html report -> "+htmlOut) {
+			t.Fatalf("unexpected stdout: %s", outOK.String())
+		}
+		htmlBytes, err := os.ReadFile(htmlOut)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(htmlBytes), "<!DOCTYPE html>") || !strings.Contains(string(htmlBytes), "checkout_legacy_cart_gauge") {
+			t.Fatalf("unexpected HTML file output:\n%s", string(htmlBytes))
+		}
+		promBytes, err := os.ReadFile(metricsOut)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(promBytes), `trimtab_active_series{name="prod-metrics",tenant="default"} 391000`) {
+			t.Fatalf("unexpected Prometheus metrics output:\n%s", string(promBytes))
+		}
+		if pushedPath != "/metrics/job/trimtab-ci/instance/prod-metrics" || pushedBody != string(promBytes) {
+			t.Fatalf("unexpected Pushgateway push: path=%q len=%d", pushedPath, len(pushedBody))
+		}
+
+		// Regret run MUST emit metrics BEFORE exiting with code 3
+		regState := filepath.Join(tmpDir, "state-regret-metrics.json")
+		l := state.NewLedger()
+		l.RecordTrancheActivation(1, time.Date(2026, 11, 19, 0, 0, 0, 0, time.UTC), 7*24*time.Hour, true, []metrics.Recommendation{
+			{FamilyName: "http_requests_total", Action: metrics.ActionDropFamily, Series: 74200},
+		})
+		if err := l.Save(regState); err != nil {
+			t.Fatal(err)
+		}
+		regMetricsOut := filepath.Join(tmpDir, "regret.prom")
+		var outReg, errReg bytes.Buffer
+		regCode := run([]string{
+			"analyze",
+			"--config", demoCfg,
+			"--format", "html",
+			"--out", filepath.Join(tmpDir, "regret.html"),
+			"--metrics-out", regMetricsOut,
+			"--pushgateway-url", pushSrv.URL,
+			"--state", regState,
+			"--now", nowFlag,
+		}, &outReg, &errReg)
+		if regCode != exitCodeRegret {
+			t.Fatalf("expected exitCodeRegret=%d, got %d (stderr=%s)", exitCodeRegret, regCode, errReg.String())
+		}
+		regProm, err := os.ReadFile(regMetricsOut)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(regProm), `trimtab_regret_events_total{name="prod-metrics",tenant="default"} 1`) {
+			t.Fatalf("expected regret counter emitted on exit 3:\n%s", string(regProm))
 		}
 	})
 }

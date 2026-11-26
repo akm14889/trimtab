@@ -30,10 +30,10 @@
 | **Phase 2** | **P2.1d** | Lean Helm Chart (`charts/trimtab/`) & Non-Prod Quickstart | `charts/trimtab/`, `.github/workflows/`, `README.md` | `[x]` Completed |
 | **Phase 2** | **P2.2** | Critical Infrastructure & Ruler Usage Sources | `pkg/usage/ruler/`, `pkg/usage/k8sconsumers/` | `[x]` Completed |
 | **Phase 2** | **P2.3** | Observability Ecosystem Static Consumers | `pkg/usage/alertmanager/`, `pkg/usage/perses/`, `pkg/usage/slo/` | `[x]` Completed |
-| **Phase 2** | **P2.4** | Live-Scale Hardening & Incremental Query-Log Ingestion | `pkg/state/`, `pkg/usage/querylog/`, `pkg/inventory/prometheus/`, `charts/trimtab/`, `test/e2e/` | `[ ]` Next |
-| **Phase 2** | **P2.5** | GitOps PR Actuator & Operational Alerting | `pkg/actuator/`, `pkg/actuator/gitops/`, `pkg/notify/` | `[ ]` Planned |
+| **Phase 2** | **P2.4** | Live-Scale Hardening, Incremental Ingestion & HTML Report | `pkg/state/`, `pkg/usage/querylog/`, `pkg/inventory/prometheus/`, `pkg/report/`, `charts/trimtab/`, `test/e2e/` | `[ ]` Next |
+| **Phase 2** | **P2.5** | GitOps PR Actuator, Operational Alerting & Grafana Dashboard | `pkg/actuator/`, `pkg/actuator/gitops/`, `pkg/notify/`, `deploy/dashboards/` | `[ ]` Planned |
 | **Phase 2** | **P2.6** | Query-Log Genericity & Lightweight In-Cluster K8s Discovery | `pkg/usage/querylog/`, `pkg/usage/k8sconsumers/` | `[ ]` Planned |
-| **Phase 2** | **P2.7** | Per-Team Attribution & FinOps Exporter | `pkg/attribution/`, `pkg/exporter/` | `[ ]` Planned |
+| **Phase 2** | **P2.7** | Per-Team Attribution & FinOps Exporter | `pkg/attribution/`, `pkg/exporter/`, `deploy/dashboards/` | `[ ]` Planned |
 | **Phase 2** | **P2.8** | Multi-Cluster & Per-Selector Drop Scoping | `pkg/scope/`, `pkg/state/`, `pkg/engine/` | `[ ]` Planned |
 | **Phase 2** | **P2.9** | Kubernetes Operator & CRDs *(Deferred / Opt-In)* | `api/v1alpha1/`, `internal/controller/`, `cmd/trimtab-operator/` | `[ ]` Deferred |
 | **Phase 3** | **P3.1** | Shard-Safe Aggregation Synthesizer | `pkg/synthesizer/aggregate/` | `[ ]` Future |
@@ -331,11 +331,16 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
      - Document the clean one-shot Job workflow (`kubectl create job --from=cronjob/...`) for running `trimtab synth --activate`, `--confirm-tranche`, and `--resolve-regret` against the CronJob's `ReadWriteOnce` State Ledger PVC.
   4. **Multi-Target Live E2E Matrix (`test/e2e/`):**
      - Keep Kind LGTM (Mimir + Loki + Grafana + Alloy) as the primary live verification gate, and add lightweight live E2E profiles for **standalone Prometheus + `promrw`** and **OpenTelemetry Collector (`filter/trimtab`)** so all 3 synthesizers are verified against real collectors.
+  5. **Static HTML Report Visualization (`pkg/report/html.go`, `cmd/trimtab/`) *(Completed 2026-11-26)*:**
+     - [x] Add `--format html` (`report.FormatHTML`) rendered via Go stdlib `html/template` with embedded CSS (zero external CDNs or JavaScript dependencies) so operators can open audit reports directly in a browser or publish them as CI artifacts.
+     - [x] Include KPI summary cards (active vs. droppable vs. synthesized series, observation coverage progress, confidence), safety-gate & regret alert banners, tranche/projected-drop tables, dead recording-rule advisories (`or vector(0)` badge), wildcard sources, and `without`-collapse label savings.
+     - [x] Add `make demo-html` target and unit tests covering deterministic rendering and `html/template` escaping.
 - **Verification & Exit Criteria:**
   - Incremental cursor tests: cold scan -> delta scan -> overlap deduplication -> regret detection across cursor boundary -> source query change resets cursor -> `--full-rescan` bypasses cursor.
   - Engine test confirming `series == 0` historical metrics never consume active drop tranches.
   - Synthetic scale benchmark (5k families / 100k unique query-log entries) verifying bounded memory and runtime.
   - Multi-target E2E profiles green across Alloy, OTel Collector, and Prometheus `remote_write`.
+  - `pkg/report/report_test.go` HTML golden/escaping tests green and `make demo-html` renders cleanly without external assets.
 
 ---
 
@@ -371,15 +376,18 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
     - **Workflow 1 — Regret Revert PR (Highest Priority):** When `len(Report.Regrets) > 0`, immediately opens/updates `trimtab/regret-revert-<name>` titled `[URGENT][Trimtab] Revert drop for <families> (regret detected)`, committing the re-synthesized artifact (regretted metrics removed) + updated state ledger (or `neverDrop` override), with the exact triggering `api-user` query, timestamp, and hit count in the PR body.
     - **Workflow 2 — Tranched Drop PR:** When `!Report.Safety.ReportOnly && !Report.Safety.Blocked` and `Artifact.DroppedFamilies > 0`, opens/updates `trimtab/tranche-<N>-<name>` writing `Artifact.Content` to the target git path and setting PR body from `report.Render(rep, report.FormatMarkdown)`. Refuses to open drop PRs in Report-Only or Blocked states. Integrates cleanly with `P2.1b`'s `pending_confirmation -> soaking` confirmation lifecycle so the soak timer starts only once the merged PR takes effect in the metrics store.
     - **Workflow 3 — Dead Recording-Rule Cleanup PR (Opt-in):** When `actuator.cleanupDeadRules: true`, parses target rule YAML files into `gopkg.in/yaml.v3` `yaml.Node` trees and removes only exact `(group, ruleName)` nodes identified in `Report.DeadRecordingRules`, preserving surrounding comments, anchors, and formatting, and highlighting any `HasOrVectorZero` rules in the PR description.
-  - **Lightweight Operational Alerting (`pkg/notify/`):**
+  - **Operational Status Metrics & Bundled Grafana Dashboard (`pkg/report/metrics.go`, `deploy/dashboards/trimtab-overview.json`, `charts/trimtab/`) *(Completed 2026-11-26)*:**
+    - [x] Emit `trimtab_*` operational status gauges (`trimtab_active_series`, `trimtab_droppable_series`, `trimtab_synthesized_drop_series`, `trimtab_query_log_coverage_days`, `trimtab_safety_gate_blocked`, `trimtab_active_tranche`, `trimtab_regret_events_total`) via optional Pushgateway push (`--pushgateway-url`) or Prometheus textfile (`--metrics-out`) for CronJob deployments without a long-running server, with `^trimtab_.*` added to `DefaultNeverDropPatterns`.
+    - [x] Ship a bundled Grafana dashboard JSON (`deploy/dashboards/trimtab-overview.json`) with optional `grafanaDashboard.enabled` ConfigMap sidecar label support in `charts/trimtab/`.
+  - **Lightweight Outbound Webhook Alerting (`pkg/notify/`):**
     - Optional read-only outbound webhook notifier (Slack-compatible and generic JSON payload, webhook URL via `*Env`/`*File` through `pkg/httpclient`) firing on actionable lifecycle events (`RegretDetected`, `BaselineDriftBlocked` / `HardFetchError`, `TrancheReady`, `TrancheConfirmedSoaking`).
-    - Optional Pushgateway / Prometheus textfile operational status metrics (`trimtab_regret_events_total`, `trimtab_safety_gate_blocked`, `trimtab_query_log_coverage_days`, `trimtab_active_tranche`) for CronJob deployments without a long-running server.
 - **CLI Additions (`cmd/trimtab/main.go`):**
   - `trimtab actuate --config trimtab.yaml [--dry-run]`: runs `Analyze` + `Synthesize` + `Actuator.Actuate` + optional `pkg/notify` dispatch.
 - **Verification & Exit Criteria:**
   - `httptest.NewServer` mock tests for GitHub, GitLab, and webhook notifier payloads (idempotent branch/commit/PR update, auth headers, secret redaction, non-2xx error handling).
   - YAML `yaml.Node` comment-preserving deletion tests (single rule deleted from multi-rule group without mangling sibling rules/comments; empty group safely handled).
   - Regret Revert PR integration test verifying `[URGENT]` PR + webhook alert fire even if tranche rollout is blocked.
+  - Pushgateway/textfile exposition tests and valid JSON/PromQL schema checks for `deploy/dashboards/trimtab-overview.json`.
 
 ---
 
@@ -427,6 +435,7 @@ All 11 Non-Negotiable Safety Invariants in [AGENT.md](../AGENT.md#L30-L49) MUST 
       - `trimtab_safety_gate_blocked{tenant,reason}`
       - `trimtab_active_tranche{tenant}`
       - `trimtab_regret_events_total{tenant}`
+  - **Grafana FinOps Dashboard (`deploy/dashboards/trimtab-finops.json` or extending `trimtab-overview.json`):** Add per-team attribution, `TelemetryBudget` utilization, unattributed telemetry ratio, and monthly dollar/series savings panels backed by `trimtab serve` `/metrics`.
 - **Verification & Exit Criteria:**
   - Resolver chain unit tests (priority precedence, Backstage YAML parsing, `"unattributed"` fallback, budget warning/exceeded thresholds).
   - `httptest` scrape test parsing Prometheus text exposition output from `pkg/exporter` via `expfmt` / `dto` and asserting all gauge/counter values match `AuditReport`.

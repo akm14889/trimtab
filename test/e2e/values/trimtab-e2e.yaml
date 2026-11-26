@@ -11,6 +11,8 @@ cronjob:
   failedJobsHistoryLimit: 3
   reportFormat: json
   noStateWrite: false
+  pushgatewayURL: "http://pushgateway.monitoring.svc.cluster.local:9091"
+  pushgatewayJob: "trimtab"
   extraArgs: []
 
 doctorTest:

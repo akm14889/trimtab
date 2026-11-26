@@ -46,12 +46,25 @@
         "backoffLimit": { "type": "integer", "minimum": 0 },
         "activeDeadlineSeconds": { "type": ["integer", "null"], "minimum": 1 },
         "ttlSecondsAfterFinished": { "type": ["integer", "null"], "minimum": 0 },
-        "reportFormat": { "type": "string", "enum": ["table", "markdown", "json"] },
+        "reportFormat": { "type": "string", "enum": ["table", "markdown", "json", "html"] },
+        "reportOut": { "type": "string" },
         "noStateWrite": { "type": "boolean" },
+        "metricsOut": { "type": "string" },
+        "pushgatewayURL": { "type": "string" },
+        "pushgatewayJob": { "type": "string" },
         "extraArgs": {
           "type": "array",
           "items": { "type": "string" }
         }
+      }
+    },
+    "grafanaDashboard": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
       }
     },
     "doctorTest": {
