@@ -62,8 +62,22 @@ spec:
                 - /etc/trimtab/trimtab.yaml
                 - --format
                 - {{ .Values.cronjob.reportFormat | quote }}
+                {{- if .Values.cronjob.reportOut }}
+                - --out
+                - {{ .Values.cronjob.reportOut | quote }}
+                {{- end }}
                 {{- if .Values.cronjob.noStateWrite }}
                 - --no-state-write
+                {{- end }}
+                {{- if .Values.cronjob.metricsOut }}
+                - --metrics-out
+                - {{ .Values.cronjob.metricsOut | quote }}
+                {{- end }}
+                {{- if .Values.cronjob.pushgatewayURL }}
+                - --pushgateway-url
+                - {{ .Values.cronjob.pushgatewayURL | quote }}
+                - --pushgateway-job
+                - {{ .Values.cronjob.pushgatewayJob | default "trimtab" | quote }}
                 {{- end }}
                 {{- range .Values.cronjob.extraArgs }}
                 - {{ . | quote }}

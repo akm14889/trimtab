@@ -1,0 +1,309 @@
+{
+  "uid": "trimtab-control-plane",
+  "title": "Trimtab Control Plane Overview",
+  "description": "Operational overview of Trimtab telemetry savings, observation coverage, safety gates, and forward-only regrets",
+  "tags": ["trimtab", "observability", "finops"],
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      },
+      {
+        "name": "name",
+        "label": "Audit",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "$datasource" },
+        "query": "label_values(trimtab_active_series, name)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2
+      },
+      {
+        "name": "tenant",
+        "label": "Tenant",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "$datasource" },
+        "query": "label_values(trimtab_active_series{name=~\"$name\"}, tenant)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active Series",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(trimtab_active_series{name=~\"$name\",tenant=~\"$tenant\"})"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Droppable Potential (%)",
+      "type": "stat",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(trimtab_droppable_percent{name=~\"$name\",tenant=~\"$tenant\"})"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Synthesized Drops (%)",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(trimtab_synthesized_drop_percent{name=~\"$name\",tenant=~\"$tenant\"})"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Active Tranche",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(trimtab_active_tranche{name=~\"$name\",tenant=~\"$tenant\"})"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Safety Gate Blocked",
+      "type": "stat",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "CLEAR", "color": "green" }, "1": { "text": "BLOCKED", "color": "red" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(trimtab_safety_gate_blocked{name=~\"$name\",tenant=~\"$tenant\"})"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Unresolved Regrets",
+      "type": "stat",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(trimtab_unresolved_regrets{name=~\"$name\",tenant=~\"$tenant\"})"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Active vs. Droppable vs. Synthesized Series",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "active ({{name}})",
+          "expr": "trimtab_active_series{name=~\"$name\",tenant=~\"$tenant\"}"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "droppable ({{name}})",
+          "expr": "trimtab_droppable_series{name=~\"$name\",tenant=~\"$tenant\"}"
+        },
+        {
+          "refId": "C",
+          "legendFormat": "synthesized drop ({{name}})",
+          "expr": "trimtab_synthesized_drop_series{name=~\"$name\",tenant=~\"$tenant\"}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Query Log Coverage vs. Observation Window",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "d", "decimals": 2 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "covered days ({{name}})",
+          "expr": "trimtab_query_log_coverage_days{name=~\"$name\",tenant=~\"$tenant\"}"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "required window ({{name}})",
+          "expr": "trimtab_required_window_days{name=~\"$name\",tenant=~\"$tenant\"}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Query Log Entries Inspected by Origin",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{origin}} ({{name}})",
+          "expr": "trimtab_query_log_queries{name=~\"$name\",tenant=~\"$tenant\"}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Safety Gates, Soak State & Regrets",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "report-only",
+          "expr": "trimtab_safety_gate_report_only{name=~\"$name\",tenant=~\"$tenant\"}"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "blocked",
+          "expr": "trimtab_safety_gate_blocked{name=~\"$name\",tenant=~\"$tenant\"}"
+        },
+        {
+          "refId": "C",
+          "legendFormat": "baseline drift",
+          "expr": "trimtab_baseline_drift_detected{name=~\"$name\",tenant=~\"$tenant\"}"
+        },
+        {
+          "refId": "D",
+          "legendFormat": "sanity ceiling",
+          "expr": "trimtab_sanity_ceiling_tripped{name=~\"$name\",tenant=~\"$tenant\"}"
+        },
+        {
+          "refId": "E",
+          "legendFormat": "soak blocked",
+          "expr": "trimtab_soak_blocked{name=~\"$name\",tenant=~\"$tenant\"}"
+        },
+        {
+          "refId": "F",
+          "legendFormat": "pending confirmation",
+          "expr": "trimtab_pending_confirmation{name=~\"$name\",tenant=~\"$tenant\"}"
+        },
+        {
+          "refId": "G",
+          "legendFormat": "regret events",
+          "expr": "trimtab_regret_events_total{name=~\"$name\",tenant=~\"$tenant\"}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Dead Recording Rules",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 20, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(trimtab_dead_recording_rules{name=~\"$name\",tenant=~\"$tenant\"})"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Label Collapse Advisories",
+      "type": "stat",
+      "gridPos": { "x": 6, "y": 20, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(trimtab_label_collapse_advisories{name=~\"$name\",tenant=~\"$tenant\"})"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Active Drop Watch Count",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 20, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(trimtab_active_drop_watch_count{name=~\"$name\",tenant=~\"$tenant\"})"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Time Since Last Audit",
+      "type": "stat",
+      "gridPos": { "x": 18, "y": 20, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max(trimtab_last_audit_timestamp_seconds{name=~\"$name\",tenant=~\"$tenant\"})"
+        }
+      ]
+    }
+  ]
+}

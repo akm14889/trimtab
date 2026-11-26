@@ -11,7 +11,20 @@ Trimtab has been deployed as a read-only observation CronJob ({{ include "trimta
    kubectl create job --from=cronjob/{{ include "trimtab.fullname" . }} {{ include "trimtab.fullname" . }}-manual -n {{ .Release.Namespace }}
    kubectl logs -n {{ .Release.Namespace }} -l job-name={{ include "trimtab.fullname" . }}-manual --tail=200
 
-3. Safety notice:
+3. Visualization & Metrics:
+{{- if .Values.grafanaDashboard.enabled }}
+   - Bundled Grafana dashboard ConfigMap ({{ include "trimtab.fullname" . }}-dashboard) is enabled (sidecar labels: {{ .Values.grafanaDashboard.labels | toJson }}).
+{{- end }}
+{{- if .Values.cronjob.metricsOut }}
+   - Operational `trimtab_*` Prometheus metrics write to {{ .Values.cronjob.metricsOut }} on the state volume.
+{{- end }}
+{{- if .Values.cronjob.reportOut }}
+   - Rendered {{ .Values.cronjob.reportFormat }} report writes to {{ .Values.cronjob.reportOut }}.
+{{- else }}
+   - Set `--set cronjob.reportFormat=html --set cronjob.reportOut={{ .Values.persistence.mountPath }}/report.html` to save a standalone HTML report.
+{{- end }}
+
+4. Safety notice:
    The scheduled CronJob only runs `trimtab analyze`. It records metric observations
    into the State Ledger ({{ .Values.config.statePath }}) and never automatically activates
    drop rules. Use `trimtab synth --preview-next` / `--activate` after the observation

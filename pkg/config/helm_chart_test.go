@@ -64,6 +64,7 @@ func TestHelmChartMetadataAndSchema(t *testing.T) {
 		"templates/NOTES.txt",
 		"templates/configmap.yaml",
 		"templates/cronjob.yaml",
+		"templates/grafana-dashboard-configmap.yaml",
 		"templates/pvc.yaml",
 		"templates/serviceaccount.yaml",
 		"templates/tests/test-doctor.yaml",

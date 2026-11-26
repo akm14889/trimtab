@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -399,4 +400,48 @@ func generateLeafCert(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.Priva
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
 		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+}
+
+func TestClientPutSuccessAndSecretRedaction(t *testing.T) {
+	t.Setenv("TEST_PUSH_TOK", "secret-push-token-99")
+	var gotMethod, gotCT, gotAuth, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotCT = r.Header.Get("Content-Type")
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	c, err := New(Options{
+		BaseURL: srv.URL,
+		Auth:    config.HTTPAuthConfig{BearerTokenEnv: "TEST_PUSH_TOK"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Put(context.Background(), "/metrics/job/trimtab", "text/plain; version=0.0.4", []byte("trimtab_active_series 42\n")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if gotMethod != http.MethodPut || gotCT != "text/plain; version=0.0.4" || gotAuth != "Bearer secret-push-token-99" || gotBody != "trimtab_active_series 42\n" {
+		t.Fatalf("unexpected PUT request: method=%q ct=%q auth=%q body=%q", gotMethod, gotCT, gotAuth, gotBody)
+	}
+
+	// 401 failure must redact secret from error
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "denied secret-push-token-99", http.StatusUnauthorized)
+	}))
+	defer badSrv.Close()
+	cBad, err := New(Options{
+		BaseURL: badSrv.URL,
+		Auth:    config.HTTPAuthConfig{BearerTokenEnv: "TEST_PUSH_TOK"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cBad.Put(context.Background(), "/metrics/job/trimtab", "text/plain", []byte("x 1\n")); err == nil || strings.Contains(err.Error(), "secret-push-token-99") || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("expected redacted 401 error, got %v", err)
+	}
 }

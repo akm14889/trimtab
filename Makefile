@@ -1,7 +1,7 @@
 BINARY := bin/trimtab
 DEMO_NOW := 2026-11-21T12:00:00Z
 
-.PHONY: build test lint verify helm-lint demo demo-otel demo-promrw demo-markdown clean kind-up kind-down kind-smoke tilt-up e2e-up e2e-build e2e-deploy e2e-seed e2e-test e2e-scenario e2e-artifacts e2e-down e2e-all
+.PHONY: build test lint verify helm-lint demo demo-otel demo-promrw demo-markdown demo-html clean kind-up kind-down kind-smoke tilt-up e2e-up e2e-build e2e-deploy e2e-seed e2e-dev e2e-dev-reload e2e-test e2e-scenario e2e-artifacts e2e-down e2e-all
 
 build:
 	go build -o $(BINARY) ./cmd/trimtab
@@ -42,6 +42,9 @@ demo-promrw: build
 demo-markdown: build
 	./$(BINARY) analyze --config examples/demo/trimtab.yaml --format markdown --now $(DEMO_NOW) --no-state-write
 
+demo-html: build
+	./$(BINARY) analyze --config examples/demo/trimtab.yaml --format html --out examples/demo/out/report.html --metrics-out examples/demo/out/trimtab.prom --now $(DEMO_NOW) --no-state-write
+
 kind-up:
 	./scripts/local-k8s.sh up
 
@@ -65,6 +68,12 @@ e2e-deploy:
 
 e2e-seed:
 	./test/e2e/e2e.sh seed
+
+e2e-dev:
+	./test/e2e/e2e.sh dev
+
+e2e-dev-reload:
+	./test/e2e/e2e.sh dev-reload
 
 e2e-test:
 	./test/e2e/e2e.sh test

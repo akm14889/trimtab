@@ -17,9 +17,10 @@ const (
 	FormatTable    Format = "table"
 	FormatMarkdown Format = "markdown"
 	FormatJSON     Format = "json"
+	FormatHTML     Format = "html"
 )
 
-// Render formats an AuditReport as a screenshot-able terminal table, Markdown, or JSON.
+// Render formats an AuditReport as a screenshot-able terminal table, Markdown, JSON, or standalone HTML.
 func Render(rep *metrics.AuditReport, format Format) (string, error) {
 	if rep == nil {
 		return "", fmt.Errorf("cannot render nil AuditReport")
@@ -35,8 +36,10 @@ func Render(rep *metrics.AuditReport, format Format) (string, error) {
 			return "", err
 		}
 		return string(b) + "\n", nil
+	case FormatHTML:
+		return renderHTML(rep)
 	default:
-		return "", fmt.Errorf("unsupported report format %q (expected table, markdown, or json)", format)
+		return "", fmt.Errorf("unsupported report format %q (expected table, markdown, json, or html)", format)
 	}
 }
 

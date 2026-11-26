@@ -30,12 +30,25 @@ cronjob:
   backoffLimit: 1
   activeDeadlineSeconds: 600
   ttlSecondsAfterFinished: null
-  # Output format printed to CronJob container logs: table | markdown | json
+  # Output format printed to CronJob container logs: table | markdown | json | html
   reportFormat: markdown
+  # Optional file path to write the rendered report (e.g. "/var/lib/trimtab/report.html").
+  reportOut: ""
   # Set true for dry-run inspection without updating the State Ledger.
   noStateWrite: false
+  # Prometheus operational metrics textfile (--metrics-out) and optional Pushgateway target (--pushgateway-url).
+  metricsOut: "/var/lib/trimtab/trimtab.prom"
+  pushgatewayURL: ""
+  pushgatewayJob: "trimtab"
   # Additional CLI flags passed to `trimtab analyze` (for example ["--accept-baseline-shift"]).
   extraArgs: []
+
+# Grafana sidecar ConfigMap containing deploy/dashboards/trimtab-overview.json.
+grafanaDashboard:
+  enabled: true
+  labels:
+    grafana_dashboard: "1"
+  annotations: {}
 
 doctorTest:
   # Installs a `helm test` Pod running `trimtab doctor --config /etc/trimtab/trimtab.yaml`.

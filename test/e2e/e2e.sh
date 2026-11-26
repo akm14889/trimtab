@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+USER_TRIMTAB_IMAGE_TAG="${TRIMTAB_IMAGE_TAG:-}"
 # shellcheck source=versions.env
 source "${SCRIPT_DIR}/versions.env"
 # shellcheck source=lib/assert.sh
@@ -30,6 +31,8 @@ Subcommands:
   build          Docker build trimtab:e2e, noisy-app, traffic-gen and load into Kind
   deploy         Install Trimtab Helm chart with values/trimtab-e2e.yaml and run helm test (doctor)
   seed           Deploy noisy-app & traffic-gen, load Mimir ruler rules, provision Grafana dashboards & queries
+  dev            Stand up LGTM + build/deploy local trimtab:dev container + dashboards + HTML report (skip 40m suite)
+  dev-reload     Rebuild & load only trimtab:dev, upgrade chart, and refresh test/e2e/artifacts/dev/report.html
   test           Run scenarios S0..S14 in order, write artifacts + summary.md, exit non-zero on FAIL
   scenario <id>  Run a single scenario (e.g. S0, S2, S7, S14) assuming cluster is up & seeded
   reset          Wipe PVC ledger & synthesized file, restore Alloy pass-through and workload env defaults
@@ -94,6 +97,9 @@ cmd_up() {
   echo ">>> [up] Deploying Mimir (${MIMIR_IMAGE})..."
   kubectl apply -f "${SCRIPT_DIR}/values/mimir.yaml" >/dev/null
 
+  echo ">>> [up] Deploying Pushgateway (${PUSHGATEWAY_IMAGE})..."
+  kubectl apply -f "${SCRIPT_DIR}/values/pushgateway.yaml" >/dev/null
+
   ensure_helm_repos
 
   echo ">>> [up] Installing Loki (chart ${LOKI_CHART_VERSION})..."
@@ -126,6 +132,9 @@ cmd_up() {
 
   echo ">>> [up] Waiting for Mimir Deployment..."
   kubectl -n "${MONITORING_NAMESPACE}" rollout status deployment/mimir --timeout=300s
+
+  echo ">>> [up] Waiting for Pushgateway Deployment..."
+  kubectl -n "${MONITORING_NAMESPACE}" rollout status deployment/pushgateway --timeout=180s
 
   ensure_curl_pod
   echo ">>> [up] Provisioning Grafana ServiceAccount token for Trimtab..."
@@ -162,18 +171,25 @@ provision_grafana_token_secret() {
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 }
 
+build_trimtab_image() {
+  local git_commit
+  git_commit="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo "${TRIMTAB_IMAGE_TAG}")"
+
+  echo ">>> [build] Building ${TRIMTAB_IMAGE}..."
+  docker build \
+    --build-arg "VERSION=v0.0.1-beta.3-${TRIMTAB_IMAGE_TAG}" \
+    --build-arg "COMMIT=${git_commit}" \
+    -t "${TRIMTAB_IMAGE}" "${REPO_ROOT}"
+
+  echo ">>> [build] Loading ${TRIMTAB_IMAGE} into Kind cluster '${KIND_CLUSTER_NAME}'..."
+  kind load docker-image "${TRIMTAB_IMAGE}" --name "${KIND_CLUSTER_NAME}"
+}
+
 cmd_build() {
   require_prereqs
   use_kind_context
 
-  local git_commit
-  git_commit="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo "e2e")"
-
-  echo ">>> [build] Building ${TRIMTAB_IMAGE}..."
-  docker build \
-    --build-arg "VERSION=v0.0.1-beta.3-e2e" \
-    --build-arg "COMMIT=${git_commit}" \
-    -t "${TRIMTAB_IMAGE}" "${REPO_ROOT}"
+  build_trimtab_image
 
   echo ">>> [build] Building ${NOISY_APP_IMAGE}..."
   docker build -t "${NOISY_APP_IMAGE}" "${SCRIPT_DIR}/workloads/noisy-app"
@@ -181,8 +197,8 @@ cmd_build() {
   echo ">>> [build] Building ${TRAFFIC_GEN_IMAGE}..."
   docker build -t "${TRAFFIC_GEN_IMAGE}" "${SCRIPT_DIR}/workloads/traffic-gen"
 
-  echo ">>> [build] Loading images into Kind cluster '${KIND_CLUSTER_NAME}'..."
-  kind load docker-image "${TRIMTAB_IMAGE}" "${NOISY_APP_IMAGE}" "${TRAFFIC_GEN_IMAGE}" --name "${KIND_CLUSTER_NAME}"
+  echo ">>> [build] Loading fixture images into Kind cluster '${KIND_CLUSTER_NAME}'..."
+  kind load docker-image "${NOISY_APP_IMAGE}" "${TRAFFIC_GEN_IMAGE}" --name "${KIND_CLUSTER_NAME}"
 }
 
 cmd_deploy() {
@@ -194,7 +210,7 @@ cmd_deploy() {
     provision_grafana_token_secret
   fi
 
-  echo ">>> [deploy] Installing Trimtab Helm chart..."
+  echo ">>> [deploy] Installing Trimtab Helm chart (image=${TRIMTAB_IMAGE})..."
   local rel_status
   rel_status="$(helm status trimtab -n "${TRIMTAB_NAMESPACE}" -o json 2>/dev/null | jq -r '.info.status // ""' || true)"
   if [[ "${rel_status}" == pending-* ]]; then
@@ -203,6 +219,9 @@ cmd_deploy() {
   helm upgrade --install trimtab "${REPO_ROOT}/charts/trimtab" \
     -n "${TRIMTAB_NAMESPACE}" \
     -f "${SCRIPT_DIR}/values/trimtab-e2e.yaml" \
+    --set "image.repository=${TRIMTAB_IMAGE_REPO}" \
+    --set "image.tag=${TRIMTAB_IMAGE_TAG}" \
+    --set "image.pullPolicy=Never" \
     --timeout 3m
 
   echo ">>> [deploy] Running pre-seed helm test (connectivity check)..."
@@ -1180,6 +1199,82 @@ cmd_reset() {
   echo ">>> [reset] Done."
 }
 
+set_dev_image_vars() {
+  TRIMTAB_IMAGE_TAG="${USER_TRIMTAB_IMAGE_TAG:-dev}"
+  TRIMTAB_IMAGE="${TRIMTAB_IMAGE_REPO}:${TRIMTAB_IMAGE_TAG}"
+  export TRIMTAB_IMAGE TRIMTAB_IMAGE_REPO TRIMTAB_IMAGE_TAG
+}
+
+provision_trimtab_dashboard() {
+  local dash_path="${REPO_ROOT}/deploy/dashboards/trimtab-overview.json"
+  if [[ -f "${dash_path}" ]]; then
+    local payload
+    payload="$(jq -c '{dashboard: ., overwrite: true}' "${dash_path}")"
+    grafana_api POST "/api/dashboards/db" "${payload}" >/dev/null
+    echo "  provisioned Trimtab Control Plane dashboard (trimtab-overview.json)"
+  fi
+}
+
+run_dev_snapshot() {
+  local dev_dir="${ARTIFACTS_BASE}/dev"
+  mkdir -p "${dev_dir}"
+  echo ">>> [dev] Running audit Job with HTML report + operational metrics push..."
+  run_trimtab_job "e2e-dev-analyze" "${dev_dir}/analyze.log" -- \
+    analyze --config /etc/trimtab/trimtab.yaml \
+    --format html --out /var/lib/trimtab/report.html \
+    --metrics-out /var/lib/trimtab/trimtab.prom \
+    --pushgateway-url http://pushgateway.monitoring.svc.cluster.local:9091 \
+    --pushgateway-job trimtab || true
+
+  fetch_pvc_file "report.html" "${dev_dir}/report.html" || true
+  fetch_pvc_file "trimtab.prom" "${dev_dir}/trimtab.prom" || true
+
+  echo ">>> [dev] Waiting for trimtab_active_series in Mimir (scraped from Pushgateway)..."
+  wait_mimir_series_nonzero "trimtab_active_series" 60 || \
+    echo ">>> [dev] Warning: trimtab_active_series not yet visible in Mimir (check Pushgateway/Alloy)"
+
+  echo ""
+  echo "=== Local Dev Environment Ready (${TRIMTAB_IMAGE}) ==="
+  echo "  Grafana Workload Overview:  http://localhost:30300/d/e2e-overview"
+  echo "  Grafana Trimtab Overview:   http://localhost:30300/d/trimtab-control-plane"
+  echo "  Grafana admin password:     kubectl -n ${MONITORING_NAMESPACE} get secret grafana -o jsonpath='{.data.admin-password}' | base64 -d; echo"
+  echo "  Mimir HTTP API:             http://localhost:30808 (X-Scope-OrgID: ${E2E_TENANT_ID})"
+  echo "  HTML Audit Report:          ${dev_dir}/report.html"
+  echo "  Prometheus Metrics Sample:  ${dev_dir}/trimtab.prom"
+  echo "  Rebuild & reload container: ./test/e2e/e2e.sh dev-reload"
+}
+
+cmd_dev() {
+  set_dev_image_vars
+  cmd_up
+  cmd_build
+  cmd_deploy
+  cmd_seed
+  provision_trimtab_dashboard
+  run_dev_snapshot
+}
+
+cmd_dev_reload() {
+  require_prereqs
+  set_dev_image_vars
+  use_kind_context
+  ensure_curl_pod
+  echo ">>> [dev-reload] Ensuring Pushgateway (${PUSHGATEWAY_IMAGE})..."
+  kubectl apply -f "${SCRIPT_DIR}/values/pushgateway.yaml" >/dev/null
+  kubectl -n "${MONITORING_NAMESPACE}" rollout status deployment/pushgateway --timeout=180s
+  echo ">>> [dev-reload] Syncing Alloy configuration..."
+  ensure_helm_repos
+  helm upgrade --install alloy grafana/alloy \
+    --version "${ALLOY_CHART_VERSION}" \
+    -n "${MONITORING_NAMESPACE}" \
+    -f "${SCRIPT_DIR}/values/alloy.yaml" \
+    --wait --timeout 5m >/dev/null
+  build_trimtab_image
+  cmd_deploy
+  provision_trimtab_dashboard
+  run_dev_snapshot
+}
+
 cmd_all() {
   cmd_up
   cmd_build
@@ -1189,11 +1284,13 @@ cmd_all() {
 }
 
 case "${1:-help}" in
-  up)        cmd_up ;;
-  build)     cmd_build ;;
-  deploy)    cmd_deploy ;;
-  seed)      cmd_seed ;;
-  test)      cmd_test ;;
+  up)         cmd_up ;;
+  build)      cmd_build ;;
+  deploy)     cmd_deploy ;;
+  seed)       cmd_seed ;;
+  dev)        cmd_dev ;;
+  dev-reload) cmd_dev_reload ;;
+  test)       cmd_test ;;
   scenario)  shift; cmd_scenario "${1:-}" ;;
   reset)     cmd_reset ;;
   artifacts) cmd_artifacts ;;

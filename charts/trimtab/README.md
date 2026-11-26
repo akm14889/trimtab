@@ -86,6 +86,14 @@ kubectl logs -n trimtab -l job-name=trimtab-manual -f
 
 ---
 
+## Visualizing Results (HTML Report & Grafana Dashboard)
+
+- **Grafana Sidecar Dashboard (enabled by default):** `grafanaDashboard.enabled: true` creates a ConfigMap containing `trimtab-overview.json` labeled `grafana_dashboard: "1"` for automatic Grafana sidecar provisioning.
+- **Prometheus Operational Metrics (enabled by default):** `cronjob.metricsOut` writes `trimtab_*` gauges to `/var/lib/trimtab/trimtab.prom` on every run; set `cronjob.pushgatewayURL` (e.g., `http://pushgateway.monitoring.svc:9091`) to also push metrics after each audit.
+- **Standalone HTML Report:** Set `cronjob.reportFormat: html` and `cronjob.reportOut: /var/lib/trimtab/report.html` (or pass `--format html --out ...` in a manual Job) to persist a self-contained HTML report on the PVC.
+
+---
+
 ## Fast Non-Prod Testing Guide
 
 By default, Trimtab waits a full `30d` observation window and `7d` soak window. To test the full workflow in a non-production cluster within a day, use [examples/values-nonprod.yaml](examples/values-nonprod.yaml):
@@ -168,9 +176,15 @@ config:
 | `cronjob.schedule` | string | `"0 */6 * * *"` | Audit CronJob schedule |
 | `cronjob.timeZone` | string | `""` | Optional IANA time zone for CronJob schedule |
 | `cronjob.concurrencyPolicy` | string | `Forbid` | `Allow`, `Forbid`, or `Replace` |
-| `cronjob.reportFormat` | string | `markdown` | Output log format: `table`, `markdown`, or `json` |
+| `cronjob.reportFormat` | string | `markdown` | Output log format: `table`, `markdown`, `json`, or `html` |
+| `cronjob.reportOut` | string | `""` | Optional file path to save the rendered report (`--out`) |
 | `cronjob.noStateWrite` | bool | `false` | Pass `--no-state-write` to `analyze` |
+| `cronjob.metricsOut` | string | `"/var/lib/trimtab/trimtab.prom"` | Write Prometheus `trimtab_*` operational metrics to file (`--metrics-out`) |
+| `cronjob.pushgatewayURL` | string | `""` | Push Prometheus `trimtab_*` metrics to Pushgateway URL (`--pushgateway-url`) |
+| `cronjob.pushgatewayJob` | string | `"trimtab"` | Pushgateway `job` label (`--pushgateway-job`) |
 | `cronjob.extraArgs` | list | `[]` | Extra CLI flags appended to `trimtab analyze` |
+| `grafanaDashboard.enabled` | bool | `true` | Create Grafana sidecar ConfigMap with `trimtab-overview.json` |
+| `grafanaDashboard.labels` | object | `{grafana_dashboard: "1"}` | Labels added to the Grafana dashboard ConfigMap |
 | `doctorTest.enabled` | bool | `true` | Render `helm test` hook running `trimtab doctor` |
 | `doctorTest.format` | string | `json` | `trimtab doctor` output format (`table` or `json`) |
 | `persistence.enabled` | bool | `true` | Persist State Ledger across CronJob runs |

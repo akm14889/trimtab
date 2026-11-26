@@ -80,8 +80,11 @@ Usage:
 Common Flags:
   --config <path>                Path to trimtab.yaml (default "trimtab.yaml")
   --target <alloy|otel|promrw>   Override synthesizer target ("alloy", "otel", or "promrw")
-  --out <path>                   Output file path for synthesized rules (synth mode; use "-" for stdout)
-  --format <fmt>                 Report format for analyze: table | markdown | json (default "table")
+  --out <path>                   Output file path (synthesized rules in synth mode, or report in analyze mode; "-" for stdout)
+  --format <fmt>                 Report format for analyze: table | markdown | json | html (default "table")
+  --metrics-out <path>           Write Prometheus operational metrics (trimtab_*) to file path
+  --pushgateway-url <url>        Push Prometheus operational metrics (trimtab_*) to Pushgateway URL
+  --pushgateway-job <job>        Pushgateway job label (default "trimtab")
   --state <path>                 Override State Ledger (.trimtab-state.json) path
   --accept-baseline-shift        Acknowledge >20% source object count drop and update baseline
   --confirm-tranche              Explicitly confirm active pending_confirmation tranche and start soak timer
@@ -111,6 +114,9 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 		targetOverride      string
 		outOverride         string
 		formatStr           string
+		metricsOut          string
+		pushgatewayURL      string
+		pushgatewayJob      string
 		stateOverride       string
 		acceptBaselineShift bool
 		confirmTranche      bool
@@ -122,6 +128,10 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 	)
 	fs.StringVar(&configPath, "config", "trimtab.yaml", "Path to trimtab.yaml")
 	fs.StringVar(&targetOverride, "target", "", "Override synthesizer target (alloy|otel|promrw)")
+	fs.StringVar(&outOverride, "out", "", "Output path for synthesized rules (synth) or rendered report (analyze)")
+	fs.StringVar(&metricsOut, "metrics-out", "", "Write Prometheus operational metrics (trimtab_*) to file")
+	fs.StringVar(&pushgatewayURL, "pushgateway-url", "", "Push Prometheus operational metrics (trimtab_*) to Pushgateway base URL")
+	fs.StringVar(&pushgatewayJob, "pushgateway-job", "trimtab", "Pushgateway job label")
 	fs.StringVar(&stateOverride, "state", "", "Override State Ledger path")
 	fs.BoolVar(&acceptBaselineShift, "accept-baseline-shift", false, "Acknowledge baseline drift and update stored counts")
 	fs.BoolVar(&confirmTranche, "confirm-tranche", false, "Explicitly confirm active pending_confirmation tranche and start soak")
@@ -129,11 +139,10 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 	fs.BoolVar(&noStateWrite, "no-state-write", false, "Do not persist State Ledger updates")
 	fs.StringVar(&nowStr, "now", "", "Override current UTC time (RFC3339)")
 	if synthOnly {
-		fs.StringVar(&outOverride, "out", "", "Output path for synthesized drop rules")
 		fs.BoolVar(&activateTranche, "activate", false, "Explicitly activate next eligible tranche into pending_confirmation")
 		fs.BoolVar(&previewNext, "preview-next", false, "Preview next eligible tranche without mutating State Ledger")
 	} else {
-		fs.StringVar(&formatStr, "format", "table", "Report format: table, markdown, json")
+		fs.StringVar(&formatStr, "format", "table", "Report format: table, markdown, json, html")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -322,6 +331,23 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 		}
 	}
 
+	// 6. Emit operational metrics if configured (--metrics-out / --pushgateway-url)
+	if metricsOut != "" || pushgatewayURL != "" {
+		promText := report.RenderPrometheusMetrics(auditReport, cfg.Inventory.TenantID)
+		if metricsOut != "" {
+			if err := writeAtomic(metricsOut, []byte(promText)); err != nil {
+				fmt.Fprintf(stderr, "trimtab: write metrics %s: %v\n", metricsOut, err)
+				return 1
+			}
+		}
+		if pushgatewayURL != "" {
+			if err := report.PushPrometheusMetrics(ctx, pushgatewayURL, pushgatewayJob, cfg.Name, promText, config.HTTPAuthConfig{}, 15*time.Second); err != nil {
+				fmt.Fprintf(stderr, "trimtab: push metrics: %v\n", err)
+				return 1
+			}
+		}
+	}
+
 	if synthOnly {
 		if outputPath != "" && outputPath != "-" {
 			fmt.Fprintf(stdout, "Synthesized %s artifact -> %s (%d families, %d series)\n",
@@ -342,7 +368,19 @@ func runAnalyze(args []string, stdout, stderr io.Writer, synthOnly bool) int {
 		fmt.Fprintf(stderr, "trimtab: render report: %v\n", err)
 		return 1
 	}
-	fmt.Fprint(stdout, rendered)
+	if outOverride != "" && outOverride != "-" {
+		if err := writeAtomic(outOverride, []byte(rendered)); err != nil {
+			fmt.Fprintf(stderr, "trimtab: write report %s: %v\n", outOverride, err)
+			return 1
+		}
+		fmtName := strings.ToLower(strings.TrimSpace(formatStr))
+		if fmtName == "" {
+			fmtName = "table"
+		}
+		fmt.Fprintf(stdout, "Wrote %s report -> %s\n", fmtName, outOverride)
+	} else {
+		fmt.Fprint(stdout, rendered)
+	}
 
 	if len(hardErrors) > 0 {
 		return 1

@@ -45,6 +45,7 @@ All image tags, chart versions, and Kind node digests are pinned in [versions.en
 | Loki (`SingleBinary`) | `monitoring` | `100m` / `500m` | `256Mi` / `768Mi` | `emptyDir`, no memcached caches |
 | Grafana | `monitoring` | `100m` / `500m` | `192Mi` / `512Mi` | `NodePort :30300`, ephemeral storage |
 | Alloy | `monitoring` | `100m` / `500m` | `192Mi` / `512Mi` | Single Deployment pod |
+| Pushgateway | `monitoring` | `10m` / `100m` | `16Mi` / `64Mi` | Single Deployment pod (`trimtab_*` metrics) |
 | `noisy-app` (x3) | `monitoring` | `20m` / `100m` ea | `24Mi` / `64Mi` ea | Controlled ~4,161 `e2e_*` series |
 | `traffic-gen` | `monitoring` | `20m` / `100m` | `24Mi` / `64Mi` | Simulated callers + regret switch |
 | Trimtab Jobs / CronJob | `trimtab` | `100m` / `500m` | `128Mi` / `384Mi` | Runs on demand + 256Mi RWO PVC |
@@ -67,6 +68,8 @@ Or drive each stage individually:
 | `make e2e-build` (`./test/e2e/e2e.sh build`) | Build `trimtab:e2e`, `noisy-app`, `traffic-gen` images and load into Kind | ~1–2 min |
 | `make e2e-deploy` (`./test/e2e/e2e.sh deploy`) | Install `charts/trimtab` with `values/trimtab-e2e.yaml` & run pre-seed `helm test` | ~20 sec |
 | `make e2e-seed` (`./test/e2e/e2e.sh seed`) | Deploy workloads, load Mimir Ruler rules, seed 7 Grafana dashboards, trigger queries | ~1–2 min |
+| `make e2e-dev` (`./test/e2e/e2e.sh dev`) | Stand up LGTM + build/deploy `trimtab:dev` container + `trimtab-control-plane` Grafana dashboard + local HTML report (`artifacts/dev/report.html`) without running the 40m suite | ~4–6 min |
+| `make e2e-dev-reload` (`./test/e2e/e2e.sh dev-reload`) | Rebuild & load only `trimtab:dev`, upgrade chart, and refresh `artifacts/dev/report.html` + `trimtab.prom` | ~15–30 sec |
 | `make e2e-test` (`./test/e2e/e2e.sh test`) | Run scenarios `S0`–`S14` sequentially and write `artifacts/<timestamp>/summary.md` | ~38–42 min (20m window + 5m staleness + 5m soak) |
 | `make e2e-scenario S=S7` | Run one scenario in isolation (assumes cluster is seeded) | ~10 sec – 11 min depending on scenario |
 | `./test/e2e/e2e.sh reset` | Wipe `.trimtab-state.json` & `trimtab.alloy` on PVC, restore pass-through & fresh stores, re-seed | ~1–2 min |
@@ -162,3 +165,108 @@ All previously dropped series resume remote-writing into Mimir on the next 15s s
 - **Series stay non-zero past 5 minutes after applying `trimtab.alloy`:** Check Mimir TSDB staleness (~5m after the last scraped sample stops); verify Alloy picked up the updated ConfigMap inside the container (`kubectl -n monitoring exec deployment/alloy -c alloy -- cat /etc/alloy/trimtab/trimtab.alloy`).
 - **Stuck `pending-install` Helm release for `trimtab`:** Never pass `--wait` to `helm upgrade --install` on `WaitForFirstConsumer` storage classes when deploying only a CronJob; run `helm uninstall trimtab -n trimtab` and reinstall without `--wait`.
 - **Resetting state completely between runs:** `./test/e2e/e2e.sh reset` wipes `.trimtab-state.json` and `trimtab.alloy` from the `trimtab-state` PVC and flushes Mimir/Loki `emptyDir` stores cleanly.
+
+---
+
+## Manual Deployment & Verification (Step-by-Step)
+
+Run these commands from the repository root if you want to deploy and inspect every component directly with `kind`, `kubectl`, `helm`, and `curl` (no `make` or `e2e.sh`).
+
+### 1. Create Kind cluster & namespaces
+
+```bash
+kind create cluster --config test/e2e/kind-config.yaml --name trimtab-e2e --wait 120s
+kubectl config use-context kind-trimtab-e2e
+kubectl create namespace monitoring
+kubectl create namespace trimtab
+```
+
+### 2. Deploy the LGTM stack
+
+```bash
+# Initial pass-through Alloy ConfigMap (must exist before Alloy starts)
+kubectl -n monitoring create configmap trimtab-alloy-rules --from-file=trimtab.alloy=/dev/stdin --dry-run=client -o yaml <<'EOF' | kubectl apply -f -
+declare "drop_unused" {
+  argument "forward_to" { optional = false }
+  export "receiver" { value = prometheus.relabel.trimtab_drop.receiver }
+  prometheus.relabel "trimtab_drop" { forward_to = argument.forward_to.value }
+}
+EOF
+
+# Mimir & Pushgateway (monolithic Deployments + Services)
+kubectl apply -f test/e2e/values/mimir.yaml
+kubectl apply -f test/e2e/values/pushgateway.yaml
+
+# Loki, Grafana, and Alloy (pinned chart versions from test/e2e/versions.env)
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo add grafana-community https://grafana-community.github.io/helm-charts
+helm repo update
+
+helm upgrade --install loki grafana-community/loki --version 21.6.0 -n monitoring -f test/e2e/values/loki.yaml --wait
+helm upgrade --install grafana grafana/grafana --version 10.5.15 -n monitoring -f test/e2e/values/grafana.yaml --set adminPassword=admin --wait
+helm upgrade --install alloy grafana/alloy --version 1.16.0 -n monitoring -f test/e2e/values/alloy.yaml --wait
+kubectl -n monitoring rollout status deployment/mimir --timeout=300s
+kubectl -n monitoring rollout status deployment/pushgateway --timeout=180s
+```
+
+### 3. Build & load local images into Kind
+
+```bash
+docker build -t trimtab:e2e .
+docker build -t trimtab-e2e-noisy-app:e2e test/e2e/workloads/noisy-app
+docker build -t trimtab-e2e-traffic-gen:e2e test/e2e/workloads/traffic-gen
+kind load docker-image trimtab:e2e trimtab-e2e-noisy-app:e2e trimtab-e2e-traffic-gen:e2e --name trimtab-e2e
+```
+
+### 4. Deploy workloads, rules, dashboards & Grafana token
+
+```bash
+# Controlled metrics fixture + simulated query traffic
+kubectl apply -f test/e2e/workloads/noisy-app/k8s.yaml -f test/e2e/workloads/traffic-gen/k8s.yaml
+
+# Load Mimir Ruler rule groups (alerting + live/dead recording chains) via NodePort :30808
+for f in test/e2e/workloads/rules/*.yaml; do
+  curl -sf -X POST -H "X-Scope-OrgID: e2e" -H "Content-Type: application/yaml" \
+    --data-binary @"$f" http://localhost:30808/prometheus/config/v1/rules/e2e-rules
+done
+
+# Provision Grafana dashboards via NodePort :30300
+for f in test/e2e/workloads/dashboards/*.json; do
+  curl -sf -X POST -u admin:admin -H "Content-Type: application/json" \
+    --data-binary @"$f" http://localhost:30300/api/dashboards/db >/dev/null
+done
+
+# Create read-only Viewer ServiceAccount token Secret for Trimtab
+SA_ID=$(curl -sf -X POST -u admin:admin -H "Content-Type: application/json" \
+  -d '{"name":"trimtab-reader","role":"Viewer"}' http://localhost:30300/api/serviceaccounts | jq -r '.id')
+TOKEN=$(curl -sf -X POST -u admin:admin -H "Content-Type: application/json" \
+  -d '{"name":"manual-token"}' "http://localhost:30300/api/serviceaccounts/${SA_ID}/tokens" | jq -r '.key')
+kubectl -n trimtab create secret generic trimtab-credentials --from-literal=GRAFANA_API_KEY="$TOKEN"
+```
+
+### 5. Deploy Trimtab & verify
+
+```bash
+# Install Trimtab Helm chart (omit --wait on WaitForFirstConsumer PVCs)
+helm upgrade --install trimtab ./charts/trimtab -n trimtab -f test/e2e/values/trimtab-e2e.yaml
+
+# Pre-flight connectivity check (trimtab doctor)
+helm test trimtab -n trimtab --logs
+
+# Run an immediate manual audit Job from the CronJob
+kubectl -n trimtab create job --from=cronjob/trimtab trimtab-manual-1
+kubectl -n trimtab wait --for=condition=complete job/trimtab-manual-1 --timeout=120s
+kubectl -n trimtab logs job/trimtab-manual-1
+
+# Quick inspection checks
+kubectl get pods -n monitoring
+kubectl get jobs,pvc -n trimtab
+curl -sf -H "X-Scope-OrgID: e2e" "http://localhost:30808/prometheus/api/v1/query?query=count(e2e_unused_big_gauge)" | jq '.data.result[0].value'
+# Grafana UI: http://localhost:30300/d/e2e-overview (admin / admin)
+```
+
+Cleanup when finished:
+
+```bash
+kind delete cluster --name trimtab-e2e
+```
