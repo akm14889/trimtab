@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.1-beta.5](https://github.com/akm14889/trimtab/compare/v0.0.1-beta.4...v0.0.1-beta.5) (2026-11-26)
+
+
+### Features
+
+* **report:** add HTML report, Prometheus metrics, and Grafana dashboard  ([#15](https://github.com/akm14889/trimtab/issues/15)) ([490e68a](https://github.com/akm14889/trimtab/commit/490e68a2924aaa0912fb665628a9aafc677bbdc9))
+
 ## [0.0.1-beta.4](https://github.com/akm14889/trimtab/compare/v0.0.1-beta.3...v0.0.1-beta.4) (2026-11-26)
 
 
